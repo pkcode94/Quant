@@ -553,12 +553,55 @@ public:
         {
             if (t.type != TradeType::Buy) continue;
             double sold = soldQuantityForParent(t.tradeId);
-            double remaining = t.quantity - sold;
+            double released = releasedForTrade(t.tradeId);
+            double remaining = t.quantity - sold - released;
             if (remaining <= 0) continue;
             double remainFrac = t.quantity > 0 ? remaining / t.quantity : 0.0;
             deployed += t.value * remaining + t.buyFee * remainFrac;
         }
         return deployed;
+    }
+
+    // ---- Released Holdings ----
+
+    double releasedForTrade(int tradeId) const
+    {
+        double total = 0.0;
+        std::ifstream f(releasedPath());
+        if (!f) return 0.0;
+        std::string line;
+        while (std::getline(f, line))
+        {
+            if (line.empty()) continue;
+            std::istringstream ss(line);
+            std::string tok;
+            int tid = 0;
+            double qty = 0;
+            std::getline(ss, tok, ',');
+            std::getline(ss, tok, ','); try { tid = std::stoi(tok); } catch (...) { continue; }
+            std::getline(ss, tok, ','); try { qty = std::stod(tok); } catch (...) { continue; }
+            if (tid == tradeId) total += qty;
+        }
+        return total;
+    }
+
+    bool releaseFromTrade(int tradeId, double qty)
+    {
+        auto trades = loadTrades();
+        auto* t = findTradeById(trades, tradeId);
+        if (!t || t->type != TradeType::Buy) return false;
+
+        double sold = soldQuantityForParent(tradeId);
+        double released = releasedForTrade(tradeId);
+        double allocated = t->quantity - sold - released;
+        if (qty > allocated + 1e-9) return false;
+        if (qty > allocated) qty = allocated;
+
+        std::ofstream f(releasedPath(), std::ios::app);
+        if (!f) return false;
+        f << t->symbol << ',' << tradeId << ','
+          << std::fixed << std::setprecision(17) << qty << '\n';
+        return true;
     }
 
     bool hasBuyTrades() const
@@ -874,6 +917,7 @@ tr:nth-child(even){background:#16213e}
         std::filesystem::remove(walletPath());
         std::filesystem::remove(pendingExitsPath());
         std::filesystem::remove(entryPointsPath());
+        std::filesystem::remove(releasedPath());
     }
 
 private:
@@ -886,6 +930,7 @@ private:
     std::string walletPath()   const { return m_dir + "/wallet.csv"; }
     std::string pendingExitsPath() const { return m_dir + "/pending_exits.csv"; }
     std::string entryPointsPath()  const { return m_dir + "/entry_points.csv"; }
+    std::string releasedPath()     const { return m_dir + "/released.csv"; }
 
     using HorizonRow = std::tuple<std::string, int, HorizonLevel>;
 

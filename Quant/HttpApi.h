@@ -540,6 +540,78 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
              "<label>Amount</label><input type='number' name='amount' step='any' required> "
              "<button class='btn-warn'>Withdraw</button></form>"
              "</div>";
+
+        // ---- Symbol Holdings ----
+        {
+            auto trades = db.loadTrades();
+            std::vector<std::string> syms;
+            for (const auto& t : trades)
+                if (std::find(syms.begin(), syms.end(), t.symbol) == syms.end())
+                    syms.push_back(t.symbol);
+
+            if (!syms.empty())
+            {
+                h << "<h2>Allocated (In Trades)</h2>"
+                     "<table><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th>"
+                     "<th>Value</th><th>Trades</th></tr>";
+                for (const auto& sym : syms)
+                {
+                    double allocQty = 0, allocValue = 0;
+                    int tradeCount = 0;
+                    for (const auto& t : trades)
+                    {
+                        if (t.symbol != sym || t.type != TradeType::Buy) continue;
+                        double sold = db.soldQuantityForParent(t.tradeId);
+                        double released = db.releasedForTrade(t.tradeId);
+                        double rem = t.quantity - sold - released;
+                        if (rem <= 0) continue;
+                        allocQty += rem;
+                        allocValue += t.value * rem;
+                        ++tradeCount;
+                    }
+                    if (allocQty <= 0) continue;
+                    double avgEntry = allocValue / allocQty;
+                    h << "<tr><td>" << html::esc(sym) << "</td>"
+                      << "<td>" << allocQty << "</td>"
+                      << "<td>" << avgEntry << "</td>"
+                      << "<td>" << allocValue << "</td>"
+                      << "<td>" << tradeCount << "</td></tr>";
+                }
+                h << "</table>";
+
+                h << "<h2>Not Allocated (Free Holdings)</h2>"
+                     "<table><tr><th>Symbol</th><th>Net Holdings</th>"
+                     "<th>In Trades</th><th>Free</th></tr>";
+                for (const auto& sym : syms)
+                {
+                    double net = db.holdingsForSymbol(sym);
+                    double allocQty = 0;
+                    for (const auto& t : trades)
+                    {
+                        if (t.symbol != sym || t.type != TradeType::Buy) continue;
+                        double sold = db.soldQuantityForParent(t.tradeId);
+                        double released = db.releasedForTrade(t.tradeId);
+                        double rem = t.quantity - sold - released;
+                        if (rem > 0) allocQty += rem;
+                    }
+                    double free = net - allocQty;
+                    h << "<tr><td>" << html::esc(sym) << "</td>"
+                      << "<td>" << net << "</td>"
+                      << "<td>" << allocQty << "</td>"
+                      << "<td>" << free << "</td></tr>";
+                }
+                h << "</table>";
+
+                // Deallocate form
+                h << "<h2>Deallocate</h2>"
+                     "<form class='card' method='POST' action='/deallocate'>"
+                     "<h3>Release holdings from a trade to free pool</h3>"
+                     "<label>Trade ID</label><input type='number' name='tradeId' required><br>"
+                     "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+                     "<button class='btn-warn'>Deallocate</button></form>";
+            }
+        }
+
         res.set_content(html::wrap("Wallet", h.str()), "text/html");
     });
 
@@ -563,6 +635,21 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
         if (amt > bal) { res.set_redirect("/wallet?err=Insufficient+balance", 303); return; }
         db.withdraw(amt);
         res.set_redirect("/wallet?msg=Withdrawn+successfully", 303);
+    });
+
+    // ========== POST /deallocate ==========
+    svr.Post("/deallocate", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "tradeId");
+        double qty = fd(f, "quantity");
+        if (qty <= 0) { res.set_redirect("/wallet?err=Quantity+must+be+positive", 303); return; }
+        if (!db.releaseFromTrade(id, qty))
+        {
+            res.set_redirect("/wallet?err=Deallocate+failed+(invalid+trade+or+qty+exceeds+allocated)", 303);
+            return;
+        }
+        res.set_redirect("/wallet?msg=Deallocated+from+trade+" + std::to_string(id), 303);
     });
 
     // ========== GET /portfolio ==========
