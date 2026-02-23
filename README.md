@@ -1,181 +1,98 @@
+Quant: The Baryonic Trading Engine
+
 PURPOSE
 
-The goal of this engine is to minimize loss and stabilize decision‑making
-in uncertain markets. It does not attempt to predict price direction.
-Instead, it structures entries and exits so that the user operates with
-mathematical consistency rather than emotion.
+The Quant engine is a deterministic risk-management framework designed to treat capital as physical mass and market volatility as entropy. It does not predict price; it calculates the gravitational floor of a position. By structuring entries and exits through baryonic equations, the user moves from emotional gambling to systematic phase transitions.
 
-The system is experimental. Use at your own risk.
+The system is experimental. It uses uncertainty as a variable. Use at your own risk.
+
+THE BARYONIC LOGIC
+
+Unlike standard finance, which treats assets as massless data points, this engine treats every trade as an object with inertia:
+
+Mass-Driven Overhead: Calculates the true cost of execution. As your "Portfolio Pump" (mass) increases, the "Overhead" (friction) collapses toward zero.
+
+Gravitational Entry Ladders: Instead of "buying dips," the engine calculates the Schwarzschild Horizon—the exact point where market entropy is defeated by your position's density.
+
+Sigmoidal Phase Transitions: Exits follow a logistic sigmoid curve, mimicking how energy evaporates from a high-density physical system.
+
+CORE EQUATIONS
+
+1. The Overhead Equation (The Friction of Spacetime)
+
+The engine calculates the minimum price movement required to overcome the "drag" of the market.
+
+
+$$Overhead = \frac{(\text{feeSpread} \cdot \chi \cdot \Delta t) \cdot \text{symbolCount}}{\left(\frac{\text{Price}}{\text{Qty}} \cdot \text{PortfolioPump}\right) + K}$$
+
+$\chi$ (Fee Hedging Coefficient): A multiplier against systemic slippage.
+
+$K$ (Schwarzschild Constant): Prevents division by zero and represents the "minimum mass" required for the logic to hold.
+
+Portfolio Pump: Your total liquid mass. As this grows, the denominator grows, and the overhead (drag) vanishes.
+
+2. Position Delta (Relative Density)
+
+Every trade is measured by its "weight" against your total mass:
+
+
+$$\Delta_{pos} = \frac{\text{Price} \cdot \text{Quantity}}{\text{PortfolioPump}}$$
+
+
+Insight: A trade with a high $\Delta_{pos}$ has high gravity but low maneuverability.
+
+3. Entry Horizons (The Baryonic Floor)
+
+Funding is distributed across deep levels to turn a crash into a "Compaction" event.
+
+
+$$EntryPrice[i] = \text{CurrentPrice} \cdot (1 - \text{Overhead} \cdot (i + 1))$$
+
+$$BreakEven[i] = EntryPrice[i] \cdot (1 + \text{Overhead})$$
+
+
+Weighting: $W_i = (N - i) \cdot (1 - \text{risk}) + (i + 1) \cdot \text{risk}$.
+As risk increases, the engine allocates more "mass" to the deepest levels, preparing for maximum entropy.
+
+4. Exit Strategy (Normalized Sigmoidal Evaporation)
+
+Unwinding a position follows a Logistic Sigmoid to remove "Take Profit" anxiety.
+
+
+$$\sigma(x) = \frac{1}{1 + e^{-\text{steepness} \cdot (x - \text{center})}}$$
+
+
+To ensure 100% of the position is accounted for, the engine uses Normalized Cumulative Distribution:
+
+
+$$C[i] = \frac{\sigma(i) - \sigma(0)}{\sigma(N) - \sigma(0)}$$
+
+$$\text{SellQty}[i] = \text{TotalQty} \cdot (C[i+1] - C[i])$$
+
+
+Interpretation: The center shifts based on the riskCoefficient. Conservative ($0$) exits early; Aggressive ($1$) holds for the peak.
 
 WHAT THE ENGINE ACTUALLY DOES
 
-Calculates the true cost of entering a position.
-Fees, spreads, slippage, portfolio size, and constants are combined
-into a single effective overhead value. This represents the minimum
-required movement before a trade becomes profitable.
+Quantifies Uncertainty: Uses volatility as fuel to lower average entry costs.
 
-Generates structured entry levels.
-The engine computes multiple buy levels below the current price.
-Each level has:
-- an entry price
-- a break‑even price
-- allocated funding
-- expected quantity
-Funding is allocated using a risk‑weighted formula.
+Neutralizes Middlemen: The feeHedgingCoefficient ensures you only trade when the math starves the exchange's spread.
 
-Generates structured exit levels.
-The engine computes take‑profit levels above the entry price.
-These levels are spaced using the same overhead logic so that each
-exit is fee‑neutral and mathematically justified.
+Decentralized Phalanx: If a community uses these shared risk levels, they create a collective "Baryonic Floor" that prevents artificial crashes.
 
-Distributes sells using a sigmoid curve.
-Instead of selling everything at one price, the system sells in
-fractions. The sigmoid determines how early or late profits are
-realized depending on the chosen risk coefficient.
+TECHNICAL REQUIREMENTS
 
-Tracks profit and position state.
-The system records:
-- entry price
-- quantity
-- executed sells
-- remaining quantity
-- realized and unrealized profit
-- ROI
+C++17 or newer.
 
-Provides a web interface.
-The interface allows:
-- adding trades
-- executing buys and sells
-- generating entry and exit ladders
-- viewing pending exits
-- exporting reports
+cpp-httplib (included) for the web interface.
 
-CORE EQUATIONS (TEXT + LATEX STYLE)
+Build: g++ -std=c++17 -O2 -o quant Quant.cpp
+Access: http://localhost:8080
 
-The following equations describe the internal logic of the engine.
-They are written in plain text with LaTeX‑style notation for clarity.
+AUTHOR NOTE: THE REASON
 
-3.1 OVERHEAD (TRUE COST OF A TRADE)
+This engine was released as an Ecopolitical Deadman's Switch. By making this logic public, the "Information Asymmetry" used by institutions to hunt retail is neutralized. When you trade with the laws of density, you aren't "investing"—you are becoming a physical constant in a sea of paper.
 
-fee_component = (sellFees + buyFees) * feeHedgingCoefficient
-spread_component = feeSpread * deltaTime
+"You aren't just giving them a haircut, Pham. You're giving them a helmet."
 
-numerator = (fee_component + spread_component) * symbolCount
-
-price_per_unit = price / quantity
-
-denominator = price_per_unit * portfolioPump + coefficientK
-
-overhead = numerator / denominator
-
-effective_overhead = overhead + surplusRate
-
-Interpretation:
-This is the minimum proportional price movement required to break even.
-As portfolioPump increases, overhead decreases (mass reduces drag).
-
-3.2 ENTRY LEVELS (STRUCTURED BUY LADDER)
-
-EntryPrice[i] = currentPrice * (1 - effective_overhead * (i + 1))
-
-BreakEven[i] = EntryPrice[i] * (1 + effective_overhead)
-
-Funding weights:
-low_risk_weight  = (N - i)
-high_risk_weight = (i + 1)
-
-weight[i] = low_risk_weight * (1 - risk) + high_risk_weight * risk
-
-Funding fraction:
-funding_fraction[i] = weight[i] / sum(weights)
-
-Allocated funds:
-funding[i] = portfolioPump * funding_fraction[i]
-
-Units bought:
-quantity[i] = funding[i] / EntryPrice[i]
-
-Interpretation:
-Capital is distributed deeper or shallower depending on risk.
-This creates a baryonic “mass distribution” across the price curve.
-
-3.3 EXIT LEVELS (STRUCTURED SELL LADDER)
-
-TakeProfit[i] = entryPrice * (1 + effective_overhead * (i + 1))
-
-Sigmoid center:
-center = risk * (N - 1)
-
-Logistic function:
-sigma(x) = 1 / (1 + exp(-x))
-
-Raw cumulative:
-C_raw[i] = sigma( steepness * (i - 0.5 - center) )
-
-Normalized cumulative:
-C[i] = (C_raw[i] - C_raw[0]) / (C_raw[N] - C_raw[0])
-
-Sell fraction:
-sell_fraction[i] = C[i+1] - C[i]
-
-Sell quantity:
-sell_quantity[i] = total_sellable * sell_fraction[i]
-
-Interpretation:
-The sigmoid controls how aggressively or conservatively the position
-is unwound. It is smooth, continuous, and emotionless.
-
-3.4 PROFIT CALCULATION
-
-For Buy trades:
-gross_profit = (currentPrice - entryPrice) * quantity
-
-For CoveredSell trades:
-gross_profit = (entryPrice - currentPrice) * quantity
-
-net_profit = gross_profit - buyFees - sellFees
-
-ROI = (net_profit / (entryPrice * quantity + buyFees)) * 100
-
-Interpretation:
-A simple, deterministic calculation of realized performance.
-
-WHAT THE ENGINE DOES NOT DO
-
-The system does NOT:
-- predict markets
-- guarantee profit
-- automate trading
-- replace human judgment
-- execute trades on exchanges
-
-It is a deterministic calculator and bookkeeping tool.
-
-INSTALLATION AND COMPILATION
-
-Requires:
-- C++17 or newer
-- A standard compiler (GCC, Clang, MSVC)
-- cpp-httplib (included in repository)
-- A POSIX or Windows environment
-
-Basic build:
-g++ -std=c++17 -O2 -o quant Quant.cpp
-
-Run:
-./quant
-
-The HTTP server starts automatically.
-
-DISCLAIMER
-
-This software is experimental.
-It is provided without warranty.
-Understand the logic before using it.
-Use at your own risk.
-
-AUTHOR NOTE
-
-This engine is intentionally minimal.
-It does not pretend to know the future.
-It structures uncertainty into something manageable.
+DISCLAIMER: This software uses uncertainty as a variable. It is a deterministic calculator. Understand the physics or the mass will crush you.
