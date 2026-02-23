@@ -108,6 +108,7 @@ inline std::string nav()
         "<a href='/generate-horizons'>Horizons Gen</a>"
         "<a href='/price-check'>Price Check</a>"
         "<a href='/market-entry'>Entry Calc</a>"
+        "<a href='/serial-generator'>Serial Gen</a>"
         "<a href='/exit-strategy'>Exit Calc</a>"
         "<a href='/pending-exits'>Pending Exits</a>"
         "<a href='/entry-points'>Entry Points</a>"
@@ -2373,6 +2374,175 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
              "<a class='btn' href='/entry-points'>Entry Points</a> "
              "<a class='btn' href='/price-check'>Price Check</a>";
         res.set_content(html::wrap("Entry Execution", h.str()), "text/html");
+    });
+
+    // ========== GET /serial-generator ==========
+    svr.Get("/serial-generator", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        double walBal = db.loadWalletBalance();
+        h << "<h1>Serial Generator</h1>"
+             "<div style='color:#8b949e;font-size:0.82em;margin-bottom:12px;'>"
+             "Generate a full series of entry + horizon + exit tuples</div>"
+             "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << walBal << "</div></div>"
+             "</div><br>"
+             "<form class='card' method='POST' action='/serial-generator'><h3>Parameters</h3>"
+             "<label>Symbol</label><input type='text' name='symbol' required><br>"
+             "<label>Current Price</label><input type='number' name='currentPrice' step='any' required><br>"
+             "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+             "<label>Entry Levels</label><input type='number' name='levels' value='4'><br>"
+             "<label>Risk</label><input type='number' name='risk' step='any' value='0.5'><br>"
+             "<label>Fee Hedging</label><input type='number' name='feeHedgingCoefficient' step='any' value='1'><br>"
+             "<label>Pump</label><input type='number' name='portfolioPump' step='any' value='0'><br>"
+             "<label>Symbol Count</label><input type='number' name='symbolCount' value='1'><br>"
+             "<label>Coefficient K</label><input type='number' name='coefficientK' step='any' value='0'><br>"
+             "<label>Fee Spread</label><input type='number' name='feeSpread' step='any' value='0'><br>"
+             "<label>Delta Time</label><input type='number' name='deltaTime' step='any' value='1'><br>"
+             "<label>Surplus Rate</label><input type='number' name='surplusRate' step='any' value='0.02'><br>"
+             "<label>Direction</label><select name='isShort'>"
+             "<option value='0'>LONG</option><option value='1'>SHORT</option></select><br>"
+             "<label>Funding</label><select name='fundMode'>"
+             "<option value='1'>Pump only</option><option value='2'>Pump + Wallet</option></select><br>"
+             "<label>Stop Losses</label><select name='generateStopLosses'>"
+             "<option value='0'>No</option><option value='1'>Yes</option></select><br>"
+             "<button>Generate Series</button></form>";
+        res.set_content(html::wrap("Serial Generator", h.str()), "text/html");
+    });
+
+    // ========== POST /serial-generator ==========
+    svr.Post("/serial-generator", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double cur = fd(f, "currentPrice");
+        double qty = fd(f, "quantity");
+        double risk = fd(f, "risk");
+        bool isShort = (fv(f, "isShort") == "1");
+        int fundMode = fi(f, "fundMode", 1);
+        bool genSL = (fv(f, "generateStopLosses") == "1");
+
+        HorizonParams p;
+        p.horizonCount = fi(f, "levels", 4);
+        p.feeHedgingCoefficient = fd(f, "feeHedgingCoefficient", 1.0);
+        p.portfolioPump = fd(f, "portfolioPump");
+        p.symbolCount = fi(f, "symbolCount", 1);
+        p.coefficientK = fd(f, "coefficientK");
+        p.feeSpread = fd(f, "feeSpread");
+        p.deltaTime = fd(f, "deltaTime", 1.0);
+        p.surplusRate = fd(f, "surplusRate");
+        p.generateStopLosses = genSL;
+
+        double walBal = db.loadWalletBalance();
+        double availableFunds = p.portfolioPump;
+        if (fundMode == 2) availableFunds += walBal;
+
+        HorizonParams entryParams = p;
+        entryParams.portfolioPump = availableFunds;
+
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+
+        if (sym.empty() || cur <= 0 || qty <= 0)
+        {
+            h << "<div class='msg err'>Symbol, price, and quantity are required</div>"
+                 "<br><a class='btn' href='/serial-generator'>Back</a>";
+            res.set_content(html::wrap("Serial Generator", h.str()), "text/html");
+            return;
+        }
+
+        auto entryLevels = MarketEntryCalculator::generate(cur, qty, entryParams, risk);
+        double eo = MultiHorizonEngine::effectiveOverhead(cur, qty, p);
+        double overhead = MultiHorizonEngine::computeOverhead(cur, qty, p);
+
+        h << "<h1>Serial Plan: " << html::esc(sym) << " @ " << cur << "</h1>";
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Overhead</div><div class='val'>" << (overhead * 100) << "%</div></div>"
+             "<div class='stat'><div class='lbl'>Effective</div><div class='val'>" << (eo * 100) << "%</div></div>"
+             "<div class='stat'><div class='lbl'>Surplus</div><div class='val'>" << (p.surplusRate * 100) << "%</div></div>"
+             "<div class='stat'><div class='lbl'>Direction</div><div class='val'>" << (isShort ? "SHORT" : "LONG") << "</div></div>"
+             "<div class='stat'><div class='lbl'>Available</div><div class='val'>" << availableFunds << "</div></div>"
+             "</div>";
+
+        // ---- entry + exit tuples (one horizon per entry) ----
+        h << "<h2>Entry + Exit Tuples</h2>"
+             "<table><tr><th>Lvl</th><th>Entry</th><th>Discount</th><th>Qty</th><th>Cost</th>"
+             "<th>Break Even</th><th>TP/unit</th><th>TP Total</th><th>TP Gross</th>";
+        if (genSL) h << "<th>SL/unit</th><th>SL Total</th><th>SL Loss</th>";
+        h << "</tr>";
+
+        for (const auto& el : entryLevels)
+        {
+            if (el.fundingQty <= 0) continue;
+            double cost = el.entryPrice * el.fundingQty;
+            double disc = cur > 0 ? ((cur - el.entryPrice) / cur * 100) : 0;
+
+            Trade tmp;
+            tmp.tradeId = -1;
+            tmp.symbol = sym;
+            tmp.type = TradeType::Buy;
+            tmp.value = el.entryPrice;
+            tmp.quantity = el.fundingQty;
+            tmp.buyFee = 0;
+            tmp.sellFee = 0;
+            tmp.parentTradeId = -1;
+            tmp.stopLossActive = false;
+            tmp.shortEnabled = isShort;
+
+            HorizonParams hp = p;
+            hp.horizonCount = 1;
+            auto horizons = MultiHorizonEngine::generate(tmp, hp);
+
+            double tpTotal = horizons.empty() ? 0 : horizons[0].takeProfit;
+            double tpu = el.fundingQty > 0 ? tpTotal / el.fundingQty : 0;
+            double tpGross = tpTotal - cost;
+
+            h << "<tr><td>" << el.index << "</td>"
+              << "<td>" << el.entryPrice << "</td>"
+              << "<td>" << disc << "%</td>"
+              << "<td>" << el.fundingQty << "</td>"
+              << "<td>" << cost << "</td>"
+              << "<td>" << el.breakEven << "</td>"
+              << "<td class='buy'>" << tpu << "</td>"
+              << "<td class='buy'>" << tpTotal << "</td>"
+              << "<td class='buy'>" << tpGross << "</td>";
+            if (genSL)
+            {
+                double slTotal = horizons.empty() ? 0 : horizons[0].stopLoss;
+                double slu = (el.fundingQty > 0 && slTotal > 0) ? slTotal / el.fundingQty : 0;
+                double slLoss = slTotal - cost;
+                h << "<td class='sell'>" << slu << "</td>"
+                  << "<td class='sell'>" << slTotal << "</td>"
+                  << "<td class='sell'>" << slLoss << "</td>";
+            }
+            h << "</tr>";
+        }
+        h << "</table>";
+
+        // ---- save form — posts to /execute-entries ----
+        h << "<h2>Save Series</h2>"
+             "<form class='card' method='POST' action='/execute-entries'>"
+             "<h3>Save all entries as pending (buy fees entered when price hits)</h3>"
+             "<input type='hidden' name='symbol' value='" << html::esc(sym) << "'>"
+             "<input type='hidden' name='currentPrice' value='" << cur << "'>"
+             "<input type='hidden' name='quantity' value='" << qty << "'>"
+             "<input type='hidden' name='risk' value='" << risk << "'>"
+             "<input type='hidden' name='isShort' value='" << (isShort ? "1" : "0") << "'>"
+             "<input type='hidden' name='fundMode' value='" << fundMode << "'>"
+             "<input type='hidden' name='levels' value='" << p.horizonCount << "'>"
+             "<input type='hidden' name='feeHedgingCoefficient' value='" << p.feeHedgingCoefficient << "'>"
+             "<input type='hidden' name='portfolioPump' value='" << p.portfolioPump << "'>"
+             "<input type='hidden' name='symbolCount' value='" << p.symbolCount << "'>"
+             "<input type='hidden' name='coefficientK' value='" << p.coefficientK << "'>"
+             "<input type='hidden' name='feeSpread' value='" << p.feeSpread << "'>"
+             "<input type='hidden' name='deltaTime' value='" << p.deltaTime << "'>"
+             "<input type='hidden' name='surplusRate' value='" << p.surplusRate << "'>"
+             "<button>Save Entry Points</button></form>";
+
+        h << "<br><a class='btn' href='/serial-generator'>Back</a>";
+        res.set_content(html::wrap("Serial Plan", h.str()), "text/html");
     });
 
     // ========== GET /wipe ==========
