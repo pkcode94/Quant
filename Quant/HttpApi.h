@@ -82,8 +82,8 @@ inline std::string css()
         ".wf-step.active{border-color:#1f6feb;color:#58a6ff;font-weight:bold;}"
         ".wf-step.done{border-color:#238636;color:#3fb950;}"
         ".wf-step.done a::before{content:'\2713  ';}"
-        ".wf-step.locked{border-color:#21262d;color:#30363d;}"
-        ".wf-step.locked a{color:#30363d;pointer-events:none;cursor:default;}"
+        ".wf-step.locked{border-color:#21262d;color:#30363d;pointer-events:none;opacity:0.4;}"
+        ".wf-step.locked a{color:#30363d;cursor:default;}"
         ".calc-console{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 16px;"
         "margin:12px 0;font-family:'Consolas',monospace;font-size:0.78em;color:#8b949e;overflow-x:auto;"
         "white-space:pre-wrap;line-height:1.6;}"
@@ -1231,6 +1231,16 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     // ========== GET /exit-strategy — form ==========
     svr.Get("/exit-strategy", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        if (!db.hasBuyTrades())
+        {
+            res.set_redirect("/market-entry?err=Add+buy+trades+first", 303);
+            return;
+        }
+        if (!db.hasAnyHorizons())
+        {
+            res.set_redirect("/generate-horizons?err=Generate+horizons+before+planning+exits", 303);
+            return;
+        }
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
@@ -1734,6 +1744,11 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     // ========== GET /generate-horizons ==========
     svr.Get("/generate-horizons", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        if (!db.hasBuyTrades())
+        {
+            res.set_redirect("/market-entry?err=Add+buy+trades+before+generating+horizons", 303);
+            return;
+        }
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
@@ -1903,18 +1918,15 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     // ========== GET /price-check ==========
     svr.Get("/price-check", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        if (!db.hasAnyHorizons())
+        {
+            res.set_redirect("/generate-horizons?err=Generate+horizons+before+using+price+check", 303);
+            return;
+        }
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
         h << "<h1>Price Check (TP/SL vs Market)</h1>";
-
-        if (!db.hasAnyHorizons())
-        {
-            h << "<div class='msg err'>No horizons generated yet. "
-                 "<a href='/generate-horizons' style='color:#58a6ff;'>Generate Horizons</a> first.</div>";
-            res.set_content(html::wrap("Price Check", h.str()), "text/html");
-            return;
-        }
 
         auto trades = db.loadTrades();
         std::vector<std::string> symbols;
