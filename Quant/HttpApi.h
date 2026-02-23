@@ -6,7 +6,7 @@
 #include "MarketEntryCalculator.h"
 #include "ExitStrategyCalculator.h"
 #include "TradeDatabase.h"
-#include "D:\Quant\Quant\cpp-httplib-master\httplib.h"
+#include "cpp-httplib-master\httplib.h"
 
 #include <string>
 #include <sstream>
@@ -1133,10 +1133,10 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
         }
         h << "</table>";
 
-        // execute form — hidden params + per-level buy fee inputs
-        h << "<h2>Execute Entry Strategy</h2>"
+        // execute form — save entry points as pending
+        h << "<h2>Save Entry Strategy</h2>"
              "<form class='card' method='POST' action='/execute-entries'>"
-             "<h3>Enter buy fees per level, then confirm</h3>"
+             "<h3>Save as pending entries (buy fees entered when price hits)</h3>"
              "<input type='hidden' name='symbol' value='" << html::esc(sym) << "'>"
              "<input type='hidden' name='currentPrice' value='" << cur << "'>"
              "<input type='hidden' name='quantity' value='" << qty << "'>"
@@ -1151,7 +1151,7 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
              "<input type='hidden' name='feeSpread' value='" << p.feeSpread << "'>"
              "<input type='hidden' name='deltaTime' value='" << p.deltaTime << "'>"
              "<input type='hidden' name='surplusRate' value='" << p.surplusRate << "'>"
-             "<table><tr><th>Lvl</th><th>Entry</th><th>Qty</th><th>Cost</th><th>Buy Fee</th></tr>";
+             "<table><tr><th>Lvl</th><th>Entry</th><th>Qty</th><th>Cost</th></tr>";
         for (const auto& el : levels)
         {
             if (el.fundingQty <= 0) continue;
@@ -1159,18 +1159,17 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
             h << "<tr><td>" << el.index << "</td>"
               << "<td>" << el.entryPrice << "</td>"
               << "<td>" << el.fundingQty << "</td>"
-              << "<td>" << cost << "</td>"
-              << "<td><input type='number' name='fee_" << el.index << "' step='any' value='0' style='width:80px;'></td></tr>";
+              << "<td>" << cost << "</td></tr>";
         }
         h << "</table>"
-             "<button>Execute All Entries</button>"
+             "<button>Save Entry Points</button>"
              "</form>";
 
         h << "<br><a class='btn' href='/market-entry'>Back</a>";
         res.set_content(html::wrap("Market Entry Results", h.str()), "text/html");
     });
 
-    // ========== POST /execute-entries — execute buy orders from market entry ==========
+    // ========== POST /execute-entries — save pending entry points ==========
     svr.Post("/execute-entries", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto f = parseForm(req.body);
@@ -1212,29 +1211,25 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
             db.deposit(p.portfolioPump);
         }
 
-        // build entry points and execute buys
+        // save entry points as pending (not traded yet — buy fees deferred to price check)
         int nextEpId = db.nextEntryId();
         std::vector<TradeDatabase::EntryPoint> entryPoints;
 
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
-        h << "<h1>Entry Execution: " << html::esc(sym) << "</h1>";
+        h << "<h1>Entry Points Saved: " << html::esc(sym) << "</h1>";
         if (p.portfolioPump > 0)
             h << "<div class='msg'>Deposited pump " << p.portfolioPump
               << " into wallet. Balance: " << db.loadWalletBalance() << "</div>";
 
-        int executed = 0, skipped = 0;
-        h << "<table><tr><th>Lvl</th><th>Entry</th><th>Qty</th><th>Fee</th>"
-             "<th>Trade</th><th>Exit TP</th><th>Exit SL</th><th>Status</th></tr>";
+        h << "<table><tr><th>Lvl</th><th>Entry</th><th>Qty</th><th>Cost</th>"
+             "<th>Exit TP</th><th>Exit SL</th><th>Status</th></tr>";
 
         for (size_t i = 0; i < levels.size(); ++i)
         {
             const auto& el = levels[i];
-            double buyQty = el.fundingQty;
-            if (buyQty <= 0) continue;
-
-            double buyFee = fd(f, "fee_" + std::to_string(el.index));
-            double cost = el.entryPrice * buyQty;
+            if (el.fundingQty <= 0) continue;
+            double cost = el.entryPrice * el.fundingQty;
 
             double exitTP, exitSL;
             if (isShort) { exitTP = el.entryPrice * (1.0 - eo); exitSL = el.entryPrice * (1.0 + eo); }
@@ -1252,51 +1247,16 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
             ep.isShort = isShort;
             ep.exitTakeProfit = exitTP;
             ep.exitStopLoss = exitSL;
-
-            double curBal = db.loadWalletBalance();
-            double totalNeeded = cost + buyFee;
-
-            if (totalNeeded > curBal)
-            {
-                double maxQty = (el.entryPrice > 0) ? (curBal - buyFee) / el.entryPrice : 0;
-                if (maxQty <= 0)
-                {
-                    h << "<tr><td>" << el.index << "</td><td>" << el.entryPrice
-                      << "</td><td>" << buyQty << "</td><td>" << buyFee
-                      << "</td><td>-</td><td>-</td><td>-</td>"
-                      << "<td class='sell'>SKIPPED (need " << totalNeeded
-                      << ", have " << curBal << ")</td></tr>";
-                    ++skipped;
-                    entryPoints.push_back(ep);
-                    continue;
-                }
-                buyQty = maxQty;
-                cost = el.entryPrice * buyQty;
-            }
-
-            int bid = db.executeBuy(sym, el.entryPrice, buyQty, buyFee);
-
-            ep.traded = true;
-            ep.linkedTradeId = bid;
-
-            // set TP/SL on the created trade
-            auto trades = db.loadTrades();
-            auto* tradePtr = db.findTradeById(trades, bid);
-            if (tradePtr)
-            {
-                tradePtr->takeProfit = exitTP * tradePtr->quantity;
-                tradePtr->stopLoss = exitSL * tradePtr->quantity;
-                tradePtr->stopLossActive = false;
-                db.updateTrade(*tradePtr);
-            }
-
-            h << "<tr><td>" << el.index << "</td><td>" << el.entryPrice
-              << "</td><td>" << buyQty << "</td><td>" << buyFee
-              << "</td><td class='buy'>#" << bid << "</td>"
-              << "<td>" << exitTP << "</td><td>" << exitSL << "</td>"
-              << "<td class='buy'>OK</td></tr>";
-            ++executed;
+            ep.traded = false;
+            ep.linkedTradeId = -1;
             entryPoints.push_back(ep);
+
+            h << "<tr><td>" << el.index << "</td>"
+              << "<td>" << el.entryPrice << "</td>"
+              << "<td>" << el.fundingQty << "</td>"
+              << "<td>" << cost << "</td>"
+              << "<td>" << exitTP << "</td><td>" << exitSL << "</td>"
+              << "<td class='buy'>PENDING</td></tr>";
         }
         h << "</table>";
 
@@ -1306,18 +1266,16 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
         db.saveEntryPoints(existingEp);
 
         h << "<div class='row'>"
-             "<div class='stat'><div class='lbl'>Executed</div><div class='val'>" << executed << "</div></div>"
-             "<div class='stat'><div class='lbl'>Skipped</div><div class='val'>" << skipped << "</div></div>"
-             "<div class='stat'><div class='lbl'>Entry Points</div><div class='val'>" << entryPoints.size() << "</div></div>"
+             "<div class='stat'><div class='lbl'>Saved</div><div class='val'>" << entryPoints.size() << "</div></div>"
              "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << db.loadWalletBalance() << "</div></div>"
              "</div>";
-        h << "<div class='msg'>" << executed << " buy order(s) executed. "
-          << entryPoints.size() << " entry point(s) saved.</div>";
+        h << "<div class='msg'>" << entryPoints.size() << " entry point(s) saved as pending. "
+          << "Use Price Check to execute when price hits entry levels.</div>";
 
-        h << "<br><a class='btn' href='/trades'>View Trades</a> "
-             "<a class='btn' href='/entry-points'>Entry Points</a> "
+        h << "<br><a class='btn' href='/entry-points'>Entry Points</a> "
+             "<a class='btn' href='/price-check'>Price Check</a> "
              "<a class='btn' href='/market-entry'>New Entry</a>";
-        res.set_content(html::wrap("Entry Executed", h.str()), "text/html");
+        res.set_content(html::wrap("Entry Points Saved", h.str()), "text/html");
     });
 
     // ========== GET /exit-strategy — form ==========
@@ -2179,9 +2137,131 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
             h << "</table>";
         }
 
+        // check OPEN entry points against market prices
+        {
+            auto entryPts = db.loadEntryPoints();
+            struct TriggeredEP { int entryId; std::string symbol; double entryPrice;
+                double fundingQty; double exitTP; double exitSL; bool isShort; double marketPrice; };
+            std::vector<TriggeredEP> hitEntries;
+            for (const auto& ep : entryPts)
+            {
+                if (ep.traded) continue;
+                double cur = priceFor(ep.symbol);
+                if (cur <= 0) continue;
+                bool hit = ep.isShort ? (cur >= ep.entryPrice) : (cur <= ep.entryPrice);
+                if (hit)
+                    hitEntries.push_back({ep.entryId, ep.symbol, ep.entryPrice,
+                        ep.fundingQty, ep.exitTakeProfit, ep.exitStopLoss, ep.isShort, cur});
+            }
+            if (!hitEntries.empty())
+            {
+                h << "<h2>Entry Points Triggered (" << hitEntries.size() << ")</h2>"
+                     "<form class='card' method='POST' action='/execute-triggered-entries'>"
+                     "<table><tr><th>ID</th><th>Symbol</th><th>Entry</th><th>Market</th>"
+                     "<th>Qty</th><th>Cost</th><th>TP</th><th>SL</th><th>Buy Fee</th></tr>";
+                for (const auto& te : hitEntries)
+                {
+                    double cost = te.entryPrice * te.fundingQty;
+                    h << "<tr><td>" << te.entryId << "</td>"
+                      << "<td>" << html::esc(te.symbol) << "</td>"
+                      << "<td>" << te.entryPrice << "</td>"
+                      << "<td class='buy'>" << te.marketPrice << "</td>"
+                      << "<td>" << te.fundingQty << "</td>"
+                      << "<td>" << cost << "</td>"
+                      << "<td>" << te.exitTP << "</td>"
+                      << "<td>" << te.exitSL << "</td>"
+                      << "<td><input type='number' name='fee_" << te.entryId
+                      << "' step='any' value='0' style='width:80px;'>"
+                      << "<input type='hidden' name='epid_" << te.entryId << "' value='1'>"
+                      << "</td></tr>";
+                }
+                h << "</table>"
+                     "<button>Execute Triggered Entries</button></form>";
+            }
+        }
+
         h << "<br><a class='btn' href='/price-check'>Back</a> "
              "<a class='btn' href='/trades'>Trades</a>";
         res.set_content(html::wrap("Price Check Results", h.str()), "text/html");
+    });
+
+    // ========== POST /execute-triggered-entries ==========
+    svr.Post("/execute-triggered-entries", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        auto entryPts = db.loadEntryPoints();
+
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << "<h1>Entry Execution</h1>";
+
+        int executed = 0, failed = 0;
+        h << "<table><tr><th>ID</th><th>Symbol</th><th>Entry</th><th>Qty</th>"
+             "<th>Fee</th><th>Trade</th><th>TP</th><th>SL</th><th>Status</th></tr>";
+
+        for (auto& ep : entryPts)
+        {
+            if (ep.traded) continue;
+            if (fv(f, "epid_" + std::to_string(ep.entryId)).empty()) continue;
+
+            double buyFee = fd(f, "fee_" + std::to_string(ep.entryId));
+            double cost = ep.entryPrice * ep.fundingQty + buyFee;
+            double walBal = db.loadWalletBalance();
+
+            if (cost > walBal)
+            {
+                h << "<tr><td>" << ep.entryId << "</td>"
+                  << "<td>" << html::esc(ep.symbol) << "</td>"
+                  << "<td>" << ep.entryPrice << "</td>"
+                  << "<td>" << ep.fundingQty << "</td>"
+                  << "<td>" << buyFee << "</td>"
+                  << "<td>-</td><td>-</td><td>-</td>"
+                  << "<td class='sell'>INSUFFICIENT (need " << cost
+                  << ", have " << walBal << ")</td></tr>";
+                ++failed;
+                continue;
+            }
+
+            int bid = db.executeBuy(ep.symbol, ep.entryPrice, ep.fundingQty, buyFee);
+            ep.traded = true;
+            ep.linkedTradeId = bid;
+
+            // set TP/SL on the created trade
+            auto trades = db.loadTrades();
+            auto* tradePtr = db.findTradeById(trades, bid);
+            if (tradePtr)
+            {
+                tradePtr->takeProfit = ep.exitTakeProfit * tradePtr->quantity;
+                tradePtr->stopLoss = ep.exitStopLoss * tradePtr->quantity;
+                tradePtr->stopLossActive = false;
+                db.updateTrade(*tradePtr);
+            }
+
+            h << "<tr><td>" << ep.entryId << "</td>"
+              << "<td>" << html::esc(ep.symbol) << "</td>"
+              << "<td>" << ep.entryPrice << "</td>"
+              << "<td>" << ep.fundingQty << "</td>"
+              << "<td>" << buyFee << "</td>"
+              << "<td class='buy'>#" << bid << "</td>"
+              << "<td>" << ep.exitTakeProfit << "</td>"
+              << "<td>" << ep.exitStopLoss << "</td>"
+              << "<td class='buy'>OK</td></tr>";
+            ++executed;
+        }
+        h << "</table>";
+
+        db.saveEntryPoints(entryPts);
+
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Executed</div><div class='val'>" << executed << "</div></div>"
+             "<div class='stat'><div class='lbl'>Failed</div><div class='val'>" << failed << "</div></div>"
+             "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << db.loadWalletBalance() << "</div></div>"
+             "</div>";
+
+        h << "<br><a class='btn' href='/trades'>Trades</a> "
+             "<a class='btn' href='/entry-points'>Entry Points</a> "
+             "<a class='btn' href='/price-check'>Price Check</a>";
+        res.set_content(html::wrap("Entry Execution", h.str()), "text/html");
     });
 
     // ========== GET /wipe ==========
