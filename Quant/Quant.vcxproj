@@ -130,13 +130,35 @@
     <ClCompile Include="Quant.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AppContext.h" />
     <ClInclude Include="ExitStrategyCalculator.h" />
+    <ClInclude Include="HtmlHelpers.h" />
     <ClInclude Include="HttpApi.h" />
+    <ClInclude Include="IdGenerator.h" />
     <ClInclude Include="MarketEntryCalculator.h" />
     <ClInclude Include="MultiHorizonEngine.h" />
+    <ClInclude Include="PriceSeries.h" />
     <ClInclude Include="ProfitCalculator.h" />
+    <ClInclude Include="Routes_Api.h" />
+    <ClInclude Include="AdminConfig.h" />
+    <ClInclude Include="Routes_Admin.h" />
+    <ClInclude Include="Routes_Auth.h" />
+    <ClInclude Include="Routes_Premium.h" />
+    <ClInclude Include="Routes_Chart.h" />
+    <ClInclude Include="Routes_Core.h" />
+    <ClInclude Include="Routes_Entry.h" />
+    <ClInclude Include="Routes_Exit.h" />
+    <ClInclude Include="Routes_Horizons.h" />
+    <ClInclude Include="Routes_PriceCheck.h" />
+    <ClInclude Include="Routes_Profit.h" />
+    <ClInclude Include="Routes_SerialGen.h" />
+    <ClInclude Include="Routes_Simulator.h" />
+    <ClInclude Include="Routes_Trades.h" />
+    <ClInclude Include="Simulator.h" />
+    <ClInclude Include="SymbolRegistry.h" />
     <ClInclude Include="Trade.h" />
     <ClInclude Include="TradeDatabase.h" />
+    <ClInclude Include="UserManager.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

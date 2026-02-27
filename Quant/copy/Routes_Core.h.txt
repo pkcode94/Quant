@@ -1,0 +1,280 @@
+#pragma once
+
+#include "HtmlHelpers.h"
+#include "TradeDatabase.h"
+#include <mutex>
+#include <algorithm>
+
+inline void registerCoreRoutes(httplib::Server& svr, TradeDatabase& db, std::mutex& dbMutex)
+{
+    // ========== GET / — Dashboard ==========
+    svr.Get("/", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        h << "<h1>Quant Trade Manager</h1>";
+
+        double wal = db.loadWalletBalance();
+        double dep = db.deployedCapital();
+        auto trades = db.loadTrades();
+        int buys = 0, sells = 0;
+        for (const auto& t : trades) { if (t.type == TradeType::Buy) ++buys; else ++sells; }
+
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Liquid</div><div class='val'>" << wal << "</div></div>"
+             "<div class='stat'><div class='lbl'>Deployed</div><div class='val'>" << dep << "</div></div>"
+             "<div class='stat'><div class='lbl'>Total</div><div class='val'>" << (wal + dep) << "</div></div>"
+             "<div class='stat'><div class='lbl'>Buys</div><div class='val'>" << buys << "</div></div>"
+             "<div class='stat'><div class='lbl'>Sells</div><div class='val'>" << sells << "</div></div>"
+             "</div>";
+
+        if (!trades.empty())
+        {
+            h << "<h2>Trades</h2><table><tr><th>ID</th><th>Symbol</th><th>Type</th>"
+                 "<th>Price</th><th>Qty</th><th>Cost</th><th>Buy Fee</th><th>Sell Fee</th><th>Net Cost</th><th>TP</th><th>SL</th><th>SL?</th>"
+                 "<th>Sold</th><th>Rem</th></tr>";
+            for (const auto& t : trades)
+            {
+                double sold = db.soldQuantityForParent(t.tradeId);
+                bool isBuy = (t.type == TradeType::Buy);
+                double grossCost = t.value * t.quantity;
+                double netCost = grossCost + t.buyFee + t.sellFee;
+                h << "<tr><td>" << t.tradeId << "</td>"
+                  << "<td>" << html::esc(t.symbol) << "</td>"
+                  << "<td class='" << (isBuy ? "buy" : "sell") << "'>" << (isBuy ? "BUY" : "SELL") << "</td>"
+                  << "<td>" << t.value << "</td><td>" << t.quantity << "</td>"
+                  << "<td>" << grossCost << "</td>"
+                  << "<td>" << t.buyFee << "</td><td>" << t.sellFee << "</td>"
+                  << "<td>" << netCost << "</td>"
+                  << "<td>" << t.takeProfit << "</td><td>" << t.stopLoss << "</td>"
+                  << "<td class='" << (t.stopLossActive ? "on" : "off") << "'>"
+                  << (t.stopLossActive ? "ON" : "OFF") << "</td>"
+                  << "<td>" << sold << "</td><td>" << (t.quantity - sold) << "</td></tr>";
+            }
+            h << "</table>";
+        }
+        res.set_content(html::wrap("Dashboard", h.str()), "text/html");
+    });
+
+    // ========== GET /wallet ==========
+    svr.Get("/wallet", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        h << "<h1>Wallet</h1>";
+        double bal = db.loadWalletBalance();
+        double dep = db.deployedCapital();
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Liquid</div><div class='val'>" << bal << "</div></div>"
+             "<div class='stat'><div class='lbl'>Deployed</div><div class='val'>" << dep << "</div></div>"
+             "<div class='stat'><div class='lbl'>Total</div><div class='val'>" << (bal + dep) << "</div></div>"
+             "</div>";
+        h << "<div class='forms-row'>"
+             "<form class='card' method='POST' action='/deposit'><h3>Deposit</h3>"
+             "<label>Amount</label><input type='number' name='amount' step='any' required> "
+             "<button>Deposit</button></form>"
+             "<form class='card' method='POST' action='/withdraw'><h3>Withdraw</h3>"
+             "<label>Amount</label><input type='number' name='amount' step='any' required> "
+             "<button class='btn-warn'>Withdraw</button></form>"
+             "</div>";
+        {
+            auto trades = db.loadTrades();
+            std::vector<std::string> syms;
+            for (const auto& t : trades)
+                if (std::find(syms.begin(), syms.end(), t.symbol) == syms.end())
+                    syms.push_back(t.symbol);
+            if (!syms.empty())
+            {
+                h << "<h2>Allocated (In Trades)</h2>"
+                     "<table><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th>"
+                     "<th>Value</th><th>Trades</th></tr>";
+                for (const auto& sym : syms)
+                {
+                    double allocQty = 0, allocValue = 0;
+                    int tradeCount = 0;
+                    for (const auto& t : trades)
+                    {
+                        if (t.symbol != sym || t.type != TradeType::Buy) continue;
+                        double sold = db.soldQuantityForParent(t.tradeId);
+                        double released = db.releasedForTrade(t.tradeId);
+                        double rem = t.quantity - sold - released;
+                        if (rem <= 0) continue;
+                        allocQty += rem;
+                        allocValue += t.value * rem;
+                        ++tradeCount;
+                    }
+                    if (allocQty <= 0) continue;
+                    double avgEntry = allocValue / allocQty;
+                    h << "<tr><td>" << html::esc(sym) << "</td>"
+                      << "<td>" << allocQty << "</td>"
+                      << "<td>" << avgEntry << "</td>"
+                      << "<td>" << allocValue << "</td>"
+                      << "<td>" << tradeCount << "</td></tr>";
+                }
+                h << "</table>";
+                h << "<h2>Not Allocated (Free Holdings)</h2>"
+                     "<table><tr><th>Symbol</th><th>Net Holdings</th>"
+                     "<th>In Trades</th><th>Free</th></tr>";
+                for (const auto& sym : syms)
+                {
+                    double net = db.holdingsForSymbol(sym);
+                    double allocQty = 0;
+                    for (const auto& t : trades)
+                    {
+                        if (t.symbol != sym || t.type != TradeType::Buy) continue;
+                        double sold = db.soldQuantityForParent(t.tradeId);
+                        double released = db.releasedForTrade(t.tradeId);
+                        double rem = t.quantity - sold - released;
+                        if (rem > 0) allocQty += rem;
+                    }
+                    double free = net - allocQty;
+                    h << "<tr><td>" << html::esc(sym) << "</td>"
+                      << "<td>" << net << "</td>"
+                      << "<td>" << allocQty << "</td>"
+                      << "<td>" << free << "</td></tr>";
+                }
+                h << "</table>";
+                h << "<h2>Deallocate</h2>"
+                     "<form class='card' method='POST' action='/deallocate'>"
+                     "<h3>Release holdings from a trade to free pool</h3>"
+                     "<label>Trade ID</label><input type='number' name='tradeId' required><br>"
+                     "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+                     "<button class='btn-warn'>Deallocate</button></form>";
+            }
+        }
+        res.set_content(html::wrap("Wallet", h.str()), "text/html");
+    });
+
+    // ========== POST /deposit ==========
+    svr.Post("/deposit", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        double amt = fd(f, "amount");
+        if (amt <= 0) { res.set_redirect("/wallet?err=Amount+must+be+positive", 303); return; }
+        db.deposit(amt);
+        res.set_redirect("/wallet?msg=Deposited+successfully", 303);
+    });
+
+    // ========== POST /withdraw ==========
+    svr.Post("/withdraw", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        double amt = fd(f, "amount");
+        if (amt <= 0) { res.set_redirect("/wallet?err=Amount+must+be+positive", 303); return; }
+        double bal = db.loadWalletBalance();
+        if (amt > bal) { res.set_redirect("/wallet?err=Insufficient+balance", 303); return; }
+        db.withdraw(amt);
+        res.set_redirect("/wallet?msg=Withdrawn+successfully", 303);
+    });
+
+    // ========== POST /deallocate ==========
+    svr.Post("/deallocate", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "tradeId");
+        double qty = fd(f, "quantity");
+        if (qty <= 0) { res.set_redirect("/wallet?err=Quantity+must+be+positive", 303); return; }
+        if (!db.releaseFromTrade(id, qty))
+        {
+            res.set_redirect("/wallet?err=Deallocate+failed+(invalid+trade+or+qty+exceeds+allocated)", 303);
+            return;
+        }
+        res.set_redirect("/wallet?msg=Deallocated+from+trade+" + std::to_string(id), 303);
+    });
+
+    // ========== GET /portfolio ==========
+    svr.Get("/portfolio", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req);
+        h << "<h1>Portfolio</h1>";
+        auto trades = db.loadTrades();
+        double totalCost = 0;
+        int buyCount = 0, sellCount = 0;
+        std::vector<std::string> seen;
+        h << "<table><tr><th>Symbol</th><th>Buys</th><th>Sells</th>"
+             "<th>Qty</th><th>Cost</th></tr>";
+        for (const auto& t : trades)
+        {
+            if (std::find(seen.begin(), seen.end(), t.symbol) != seen.end()) continue;
+            seen.push_back(t.symbol);
+            double sc = 0, sq = 0; int b = 0, s = 0;
+            for (const auto& u : trades)
+            {
+                if (u.symbol != t.symbol) continue;
+                if (u.type == TradeType::Buy) { sc += u.value * u.quantity; sq += u.quantity; ++b; }
+                else ++s;
+            }
+            h << "<tr><td>" << html::esc(t.symbol) << "</td><td>" << b << "</td><td>" << s
+              << "</td><td>" << sq << "</td><td>" << sc << "</td></tr>";
+            totalCost += sc; buyCount += b; sellCount += s;
+        }
+        h << "</table>";
+        double wal = db.loadWalletBalance();
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Total Cost</div><div class='val'>" << totalCost << "</div></div>"
+             "<div class='stat'><div class='lbl'>Buys</div><div class='val'>" << buyCount << "</div></div>"
+             "<div class='stat'><div class='lbl'>Sells</div><div class='val'>" << sellCount << "</div></div>"
+             "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << wal << "</div></div>"
+             "<div class='stat'><div class='lbl'>Total</div><div class='val'>" << (wal + totalCost) << "</div></div>"
+             "</div>";
+        res.set_content(html::wrap("Portfolio", h.str()), "text/html");
+    });
+
+    // ========== GET /dca ==========
+    svr.Get("/dca", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << "<h1>DCA Tracker</h1>";
+        auto trades = db.loadTrades();
+        std::vector<std::string> seen;
+        h << "<table><tr><th>Symbol</th><th>Buys</th><th>Qty</th><th>Cost</th>"
+             "<th>Avg Entry</th><th>Low</th><th>High</th><th>Spread</th></tr>";
+        for (const auto& t : trades)
+        {
+            if (t.type != TradeType::Buy) continue;
+            if (std::find(seen.begin(), seen.end(), t.symbol) != seen.end()) continue;
+            seen.push_back(t.symbol);
+            double cost = 0, qty = 0, lo = 1e18, hi = 0; int cnt = 0;
+            for (const auto& u : trades)
+            {
+                if (u.symbol != t.symbol || u.type != TradeType::Buy) continue;
+                cost += u.value * u.quantity; qty += u.quantity;
+                if (u.value < lo) lo = u.value;
+                if (u.value > hi) hi = u.value;
+                ++cnt;
+            }
+            double avg = qty != 0 ? cost / qty : 0;
+            h << "<tr><td>" << html::esc(t.symbol) << "</td><td>" << cnt
+              << "</td><td>" << qty << "</td><td>" << cost << "</td><td>" << avg
+              << "</td><td>" << lo << "</td><td>" << hi << "</td><td>" << (hi - lo) << "</td></tr>";
+        }
+        h << "</table>";
+        if (seen.empty()) h << "<p class='empty'>(no buy trades)</p>";
+        res.set_content(html::wrap("DCA", h.str()), "text/html");
+    });
+
+    // ========== GET /wipe ==========
+    svr.Get("/wipe", [&](const httplib::Request& req, httplib::Response& res) {
+        std::ostringstream h;
+        h << html::msgBanner(req);
+        h << "<h1>Wipe Database</h1>"
+             "<p style='color:#f85149;'>This will delete ALL trades, wallet balance, "
+             "pending exits, entry points, and history.</p>"
+             "<form class='card' method='POST' action='/do-wipe'>"
+             "<button class='btn-danger'>Wipe Everything</button></form>"
+             "<br><a class='btn' href='/'>Cancel</a>";
+        res.set_content(html::wrap("Wipe", h.str()), "text/html");
+    });
+
+    // ========== POST /do-wipe ==========
+    svr.Post("/do-wipe", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        db.clearAll();
+        res.set_redirect("/?msg=Database+wiped", 303);
+    });
+}

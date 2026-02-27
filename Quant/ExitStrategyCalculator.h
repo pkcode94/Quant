@@ -81,12 +81,35 @@ public:
         std::vector<ExitLevel> levels;
         levels.reserve(N);
 
+        bool useMaxRisk = (p.maxRisk > 0.0);
+        double mrMinF = 0, mrMaxF = 0, mrS0 = 0, mrSR = 1;
+        if (useMaxRisk)
+        {
+            mrMinF = MultiHorizonEngine::computeOverhead(trade.value, trade.quantity, p);
+            mrMaxF = p.maxRisk;
+            if (mrMaxF < mrMinF) mrMaxF = mrMinF;
+            mrS0 = sigmoid(-steep * 0.5);
+            double mrS1 = sigmoid(steep * 0.5);
+            mrSR = (mrS1 - mrS0 > 0) ? mrS1 - mrS0 : 1.0;
+        }
+
         double cumSold = 0.0;
         double cumNet  = 0.0;
 
         for (int i = 0; i < N; ++i)
         {
-            double factor = eo * static_cast<double>(i + 1);
+            double factor;
+            if (useMaxRisk)
+            {
+                double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1)
+                                   : 1.0;
+                double norm = (sigmoid(steep * (t - 0.5)) - mrS0) / mrSR;
+                factor = mrMinF + norm * (mrMaxF - mrMinF);
+            }
+            else
+            {
+                factor = eo * static_cast<double>(i + 1);
+            }
 
             ExitLevel el;
             el.index        = i;

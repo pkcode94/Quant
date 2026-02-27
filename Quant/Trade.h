@@ -37,6 +37,9 @@ struct Trade
     bool   stopLossActive  = false;   // deactivated by default
     bool   shortEnabled    = false;   // short trades disabled by default
 
+    // Timestamp (unix seconds, 0 = not set)
+    long long timestamp    = 0;
+
     Trade() = default;
 
     bool isChild()  const { return parentTradeId >= 0; }

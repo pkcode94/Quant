@@ -1,0 +1,451 @@
+#pragma once
+
+#include "HtmlHelpers.h"
+#include "TradeDatabase.h"
+#include "MarketEntryCalculator.h"
+#include <mutex>
+#include <cmath>
+#include <limits>
+
+inline void registerApiRoutes(httplib::Server& svr, TradeDatabase& db, std::mutex& dbMutex)
+{
+    // ========== JSON API: GET /api/trades ==========
+    svr.Get("/api/trades", [&](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto trades = db.loadTrades();
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17) << "[";
+        bool first = true;
+        for (const auto& t : trades)
+        {
+            if (!first) j << ",";
+            first = false;
+            double sold = db.soldQuantityForParent(t.tradeId);
+            bool isBuy = (t.type == TradeType::Buy);
+            double tpPrice = (isBuy && t.quantity > 0 && t.takeProfit > 0) ? t.takeProfit / t.quantity : 0;
+            double slPrice = (isBuy && t.quantity > 0 && t.stopLoss > 0) ? t.stopLoss / t.quantity : 0;
+            j << "{\"id\":" << t.tradeId
+              << ",\"symbol\":\"" << t.symbol << "\""
+              << ",\"type\":\"" << (isBuy ? "Buy" : "Sell") << "\""
+              << ",\"price\":" << t.value
+              << ",\"qty\":" << t.quantity
+              << ",\"sold\":" << sold
+              << ",\"remaining\":" << (t.quantity - sold)
+              << ",\"buyFee\":" << t.buyFee
+              << ",\"sellFee\":" << t.sellFee
+              << ",\"tp\":" << t.takeProfit
+              << ",\"sl\":" << t.stopLoss
+              << ",\"tpPrice\":" << tpPrice
+              << ",\"slPrice\":" << slPrice
+              << ",\"slActive\":" << (t.stopLossActive ? "true" : "false")
+              << ",\"parentId\":" << t.parentTradeId
+              << "}";
+        }
+        j << "]";
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: GET /api/entry-points ==========
+    svr.Get("/api/entry-points", [&](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto pts = db.loadEntryPoints();
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17) << "[";
+        bool first = true;
+        for (const auto& ep : pts)
+        {
+            if (!first) j << ",";
+            first = false;
+            j << "{\"id\":" << ep.entryId
+              << ",\"symbol\":\"" << ep.symbol << "\""
+              << ",\"level\":" << ep.levelIndex
+              << ",\"entry\":" << ep.entryPrice
+              << ",\"breakEven\":" << ep.breakEven
+              << ",\"funding\":" << ep.funding
+              << ",\"qty\":" << ep.fundingQty
+              << ",\"tp\":" << ep.exitTakeProfit
+              << ",\"sl\":" << ep.exitStopLoss
+              << ",\"isShort\":" << (ep.isShort ? "true" : "false")
+              << ",\"traded\":" << (ep.traded ? "true" : "false")
+              << ",\"linkedTrade\":" << ep.linkedTradeId
+              << "}";
+        }
+        j << "]";
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: GET /api/pending-exits ==========
+    svr.Get("/api/pending-exits", [&](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto orders = db.loadPendingExits();
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17) << "[";
+        bool first = true;
+        for (const auto& pe : orders)
+        {
+            if (!first) j << ",";
+            first = false;
+            j << "{\"orderId\":" << pe.orderId
+              << ",\"symbol\":\"" << pe.symbol << "\""
+              << ",\"tradeId\":" << pe.tradeId
+              << ",\"trigger\":" << pe.triggerPrice
+              << ",\"qty\":" << pe.sellQty
+              << ",\"level\":" << pe.levelIndex
+              << "}";
+        }
+        j << "]";
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: GET /api/horizons?tradeId=N ==========
+    svr.Get("/api/horizons", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        int id = 0;
+        try { id = std::stoi(req.get_param_value("tradeId")); } catch (...) {}
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17) << "[";
+        if (tp)
+        {
+            auto levels = db.loadHorizonLevels(tp->symbol, id);
+            bool first = true;
+            for (const auto& lv : levels)
+            {
+                if (!first) j << ",";
+                first = false;
+                double tpu = tp->quantity > 0 ? lv.takeProfit / tp->quantity : 0;
+                double slu = (tp->quantity > 0 && lv.stopLoss > 0) ? lv.stopLoss / tp->quantity : 0;
+                j << "{\"index\":" << lv.index
+                  << ",\"tp\":" << lv.takeProfit
+                  << ",\"tpPrice\":" << tpu
+                  << ",\"sl\":" << lv.stopLoss
+                  << ",\"slPrice\":" << slu
+                  << ",\"slActive\":" << (lv.stopLossActive ? "true" : "false")
+                  << "}";
+            }
+        }
+        j << "]";
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: POST /api/calc/entry — live entry calculation ==========
+    svr.Post("/api/calc/entry", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double cur = fd(f, "currentPrice");
+        double qty = fd(f, "quantity");
+        double risk = fd(f, "risk");
+        double steepness = fd(f, "steepness", 6.0);
+        bool isShort = (fv(f, "isShort") == "1");
+        int fundMode = fi(f, "fundMode", 1);
+        double rangeAbove = fd(f, "rangeAbove");
+        double rangeBelow = fd(f, "rangeBelow");
+        HorizonParams p;
+        p.horizonCount = fi(f, "levels", 4);
+        p.feeHedgingCoefficient = fd(f, "feeHedgingCoefficient", 1.0);
+        p.portfolioPump = fd(f, "portfolioPump");
+        p.symbolCount = fi(f, "symbolCount", 1);
+        p.coefficientK = fd(f, "coefficientK");
+        p.feeSpread = fd(f, "feeSpread");
+        p.deltaTime = fd(f, "deltaTime", 1.0);
+        p.surplusRate = fd(f, "surplusRate");
+        p.maxRisk = fd(f, "maxRisk");
+        p.minRisk = fd(f, "minRisk");
+
+        double walBal = db.loadWalletBalance();
+        double availableFunds = p.portfolioPump;
+        if (fundMode == 2) availableFunds += walBal;
+        HorizonParams entryParams = p;
+        entryParams.portfolioPump = availableFunds;
+
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17);
+        if (sym.empty() || cur <= 0 || qty <= 0) { j << "{\"error\":true}"; }
+        else
+        {
+            auto levels = MarketEntryCalculator::generate(cur, qty, entryParams, risk, steepness, rangeAbove, rangeBelow);
+            double eo = MultiHorizonEngine::effectiveOverhead(cur, qty, p);
+            double overhead = MultiHorizonEngine::computeOverhead(cur, qty, p);
+            double tpRef = (rangeAbove > 0.0 || rangeBelow > 0.0) ? cur + rangeAbove : cur;
+
+            j << "{\"symbol\":\"" << sym << "\",\"currentPrice\":" << cur
+              << ",\"overhead\":" << overhead << ",\"effective\":" << eo
+              << ",\"isShort\":" << (isShort ? "true" : "false")
+              << ",\"levels\":[";
+            bool first = true;
+            for (const auto& el : levels)
+            {
+                if (!first) j << ",";
+                first = false;
+                double exitTP = MultiHorizonEngine::levelTP(el.entryPrice, overhead, eo, p, steepness, el.index, p.horizonCount, isShort, risk, tpRef);
+                double exitSL = MultiHorizonEngine::levelSL(el.entryPrice, eo, isShort);
+                j << "{\"index\":" << el.index
+                  << ",\"entry\":" << el.entryPrice
+                  << ",\"breakEven\":" << el.breakEven
+                  << ",\"tp\":" << exitTP
+                  << ",\"sl\":" << exitSL
+                  << ",\"funding\":" << el.funding
+                  << ",\"fundPct\":" << (el.fundingFraction * 100)
+                  << ",\"qty\":" << el.fundingQty
+                  << ",\"net\":" << el.potentialNet
+                  << "}";
+            }
+            j << "]}";
+        }
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: POST /api/calc/serial — live serial calculation ==========
+    svr.Post("/api/calc/serial", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double cur = fd(f, "currentPrice");
+        double qty = fd(f, "quantity");
+        double risk = fd(f, "risk");
+        double steepness = fd(f, "steepness", 6.0);
+        bool isShort = (fv(f, "isShort") == "1");
+        int fundMode = fi(f, "fundMode", 1);
+        bool genSL = (fv(f, "generateStopLosses") == "1");
+        double rangeAbove = fd(f, "rangeAbove");
+        double rangeBelow = fd(f, "rangeBelow");
+
+        HorizonParams p;
+        p.horizonCount = fi(f, "levels", 4);
+        p.feeHedgingCoefficient = fd(f, "feeHedgingCoefficient", 1.0);
+        p.portfolioPump = fd(f, "portfolioPump");
+        p.symbolCount = fi(f, "symbolCount", 1);
+        p.coefficientK = fd(f, "coefficientK");
+        p.feeSpread = fd(f, "feeSpread");
+        p.deltaTime = fd(f, "deltaTime", 1.0);
+        p.surplusRate = fd(f, "surplusRate");
+        p.maxRisk = fd(f, "maxRisk");
+        p.minRisk = fd(f, "minRisk");
+
+        double walBal = db.loadWalletBalance();
+        double availableFunds = p.portfolioPump;
+        if (fundMode == 2) availableFunds += walBal;
+
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17);
+        if (sym.empty() || cur <= 0 || qty <= 0) { j << "{\"error\":true}"; }
+        else
+        {
+            int N = p.horizonCount;
+            if (N < 1) N = 1;
+            if (steepness < 0.1) steepness = 0.1;
+
+            auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
+            double sig0 = sigmoid(-steepness * 0.5);
+            double sig1 = sigmoid(steepness * 0.5);
+            double sigRange = (sig1 - sig0 > 0) ? sig1 - sig0 : 1.0;
+
+            double priceLow, priceHigh;
+            if (rangeAbove > 0.0 || rangeBelow > 0.0)
+            {
+                priceLow = cur - rangeBelow;
+                if (priceLow < 1e-18) priceLow = 1e-18;
+                priceHigh = cur + rangeAbove;
+            }
+            else
+            {
+                priceLow = 0.0;
+                priceHigh = cur;
+            }
+
+            std::vector<double> norm(N);
+            for (int i = 0; i < N; ++i)
+            {
+                double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1) : 1.0;
+                double sigVal = sigmoid(steepness * (t - 0.5));
+                norm[i] = (sigVal - sig0) / sigRange;
+            }
+
+            double riskClamped = (risk < 0) ? 0 : (risk > 1) ? 1 : risk;
+            std::vector<double> weights(N);
+            double weightSum = 0;
+            for (int i = 0; i < N; ++i)
+            {
+                weights[i] = (1.0 - riskClamped) * norm[i] + riskClamped * (1.0 - norm[i]);
+                if (weights[i] < 1e-12) weights[i] = 1e-12;
+                weightSum += weights[i];
+            }
+
+            double eo = MultiHorizonEngine::effectiveOverhead(cur, qty, p);
+            double overhead = MultiHorizonEngine::computeOverhead(cur, qty, p);
+
+            j << "{\"symbol\":\"" << sym << "\",\"currentPrice\":" << cur
+              << ",\"overhead\":" << overhead << ",\"effective\":" << eo
+              << ",\"isShort\":" << (isShort ? "true" : "false")
+              << ",\"levels\":[";
+            bool first = true;
+            for (int i = 0; i < N; ++i)
+            {
+                double entryPrice = priceLow + norm[i] * (priceHigh - priceLow);
+                if (entryPrice < 1e-18) entryPrice = 1e-18;
+
+                double tpPrice = MultiHorizonEngine::levelTP(entryPrice, overhead, eo, p, steepness, i, N, isShort, riskClamped, priceHigh);
+                double slPrice = MultiHorizonEngine::levelSL(entryPrice, eo, isShort);
+
+                double fundFrac = (weightSum > 0) ? weights[i] / weightSum : 0;
+                double funding = availableFunds * fundFrac;
+                double fundQty = funding / entryPrice;
+                double breakEven = entryPrice * (1.0 + overhead);
+
+                if (!first) j << ",";
+                first = false;
+                j << "{\"index\":" << i
+                  << ",\"entry\":" << entryPrice
+                  << ",\"breakEven\":" << breakEven
+                  << ",\"tp\":" << tpPrice
+                  << ",\"sl\":" << (genSL ? slPrice : 0.0)
+                  << ",\"funding\":" << funding
+                  << ",\"fundPct\":" << (fundFrac * 100)
+                  << ",\"qty\":" << fundQty
+                  << "}";
+            }
+            j << "]}";
+        }
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: GET /api/param-models ==========
+    svr.Get("/api/param-models", [&](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto models = db.loadParamModels();
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(17) << "[";
+        bool first = true;
+        for (const auto& m : models)
+        {
+            if (!first) j << ",";
+            first = false;
+            j << "{\"name\":\"" << html::esc(m.name) << "\""
+              << ",\"levels\":" << m.levels
+              << ",\"risk\":" << m.risk
+              << ",\"steepness\":" << m.steepness
+              << ",\"feeHedgingCoefficient\":" << m.feeHedgingCoefficient
+              << ",\"portfolioPump\":" << m.portfolioPump
+              << ",\"symbolCount\":" << m.symbolCount
+              << ",\"coefficientK\":" << m.coefficientK
+              << ",\"feeSpread\":" << m.feeSpread
+              << ",\"deltaTime\":" << m.deltaTime
+              << ",\"surplusRate\":" << m.surplusRate
+              << ",\"maxRisk\":" << m.maxRisk
+              << ",\"minRisk\":" << m.minRisk
+              << ",\"isShort\":" << (m.isShort ? "true" : "false")
+              << ",\"fundMode\":" << m.fundMode
+              << ",\"generateStopLosses\":" << (m.generateStopLosses ? "true" : "false")
+              << ",\"rangeAbove\":" << m.rangeAbove
+              << ",\"rangeBelow\":" << m.rangeBelow
+              << "}";
+        }
+        j << "]";
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content(j.str(), "application/json");
+    });
+
+    // ========== JSON API: POST /api/param-models — save a model ==========
+    svr.Post("/api/param-models", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        try {
+        auto f = parseForm(req.body);
+        TradeDatabase::ParamModel m;
+        m.name = fv(f, "name");
+        if (m.name.empty()) { res.status = 400; res.set_content("{\"error\":\"name required\"}", "application/json"); return; }
+        m.levels = fi(f, "levels", 4);
+        m.risk = fd(f, "risk", 0.5);
+        m.steepness = fd(f, "steepness", 6.0);
+        m.feeHedgingCoefficient = fd(f, "feeHedgingCoefficient", 1.0);
+        m.portfolioPump = fd(f, "portfolioPump");
+        m.symbolCount = fi(f, "symbolCount", 1);
+        m.coefficientK = fd(f, "coefficientK");
+        m.feeSpread = fd(f, "feeSpread");
+        m.deltaTime = fd(f, "deltaTime", 1.0);
+        m.surplusRate = fd(f, "surplusRate");
+        m.maxRisk = fd(f, "maxRisk");
+        m.minRisk = fd(f, "minRisk");
+        m.isShort = (fv(f, "isShort") == "1");
+        m.fundMode = fi(f, "fundMode", 1);
+        m.generateStopLosses = (fv(f, "generateStopLosses") == "1");
+        m.rangeAbove = fd(f, "rangeAbove");
+        m.rangeBelow = fd(f, "rangeBelow");
+        db.addParamModel(m);
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content("{\"ok\":true}", "application/json");
+        } catch (const std::exception& ex) {
+            res.status = 500;
+            res.set_header("Access-Control-Allow-Origin", "*");
+            res.set_content(std::string("{\"error\":\"") + ex.what() + "\"}", "application/json");
+        }
+    });
+
+    // ========== JSON API: DELETE /api/param-models — delete a model ==========
+    svr.Delete("/api/param-models", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::string name;
+        if (req.has_param("name")) name = req.get_param_value("name");
+        if (name.empty()) { res.status = 400; res.set_content("{\"error\":\"name required\"}", "application/json"); return; }
+        db.removeParamModel(name);
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_content("{\"ok\":true}", "application/json");
+    });
+
+    // ========== GET /param-models — HTML management page ==========
+    svr.Get("/param-models", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        h << "<h1>Parameter Models</h1>";
+        auto models = db.loadParamModels();
+        if (models.empty()) { h << "<p class='empty'>(no saved models)</p>"; }
+        else
+        {
+            h << "<table><tr><th>Name</th><th>Levels</th><th>Risk</th><th>Steepness</th>"
+                 "<th>Hedging</th><th>Pump</th><th>Spread</th><th>dT</th>"
+                 "<th>Surplus</th><th>MaxRisk</th><th>MinRisk</th>"
+                 "<th>Dir</th><th>Range&uarr;</th><th>Range&darr;</th><th>Actions</th></tr>";
+            for (const auto& m : models)
+            {
+                h << "<tr><td>" << html::esc(m.name) << "</td>"
+                  << "<td>" << m.levels << "</td>"
+                  << "<td>" << m.risk << "</td>"
+                  << "<td>" << m.steepness << "</td>"
+                  << "<td>" << m.feeHedgingCoefficient << "</td>"
+                  << "<td>" << m.portfolioPump << "</td>"
+                  << "<td>" << m.feeSpread << "</td>"
+                  << "<td>" << m.deltaTime << "</td>"
+                  << "<td>" << m.surplusRate << "</td>"
+                  << "<td>" << m.maxRisk << "</td>"
+                  << "<td>" << m.minRisk << "</td>"
+                  << "<td>" << (m.isShort ? "SHORT" : "LONG") << "</td>"
+                  << "<td>" << m.rangeAbove << "</td>"
+                  << "<td>" << m.rangeBelow << "</td>"
+                  << "<td><form class='iform' method='POST' action='/delete-param-model'>"
+                  << "<input type='hidden' name='name' value='" << html::esc(m.name) << "'>"
+                  << "<button class='btn-sm btn-danger'>Del</button></form></td></tr>";
+            }
+            h << "</table>";
+        }
+        h << "<br><a class='btn' href='/chart'>Chart</a>";
+        res.set_content(html::wrap("Parameter Models", h.str()), "text/html");
+    });
+
+    // ========== POST /delete-param-model ==========
+    svr.Post("/delete-param-model", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string name = fv(f, "name");
+        db.removeParamModel(name);
+        res.set_redirect("/param-models?msg=Model+" + name + "+deleted", 303);
+    });
+}

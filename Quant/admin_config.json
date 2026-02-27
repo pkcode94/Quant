@@ -1,0 +1,6 @@
+{
+  "premiumPriceMbtc": 5,
+  "freeTradeLimit": 500,
+  "electrumPath": "electrum",
+  "electrumWallet": ""
+}

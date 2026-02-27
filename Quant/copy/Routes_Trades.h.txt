@@ -1,0 +1,268 @@
+#pragma once
+
+#include "HtmlHelpers.h"
+#include "TradeDatabase.h"
+#include <mutex>
+
+inline void registerTradeRoutes(httplib::Server& svr, TradeDatabase& db, std::mutex& dbMutex)
+{
+    // ========== GET /trades — Trades list + forms ==========
+    svr.Get("/trades", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        h << "<h1>Trades</h1>";
+        auto trades = db.loadTrades();
+        if (trades.empty()) { h << "<p class='empty'>(no trades)</p>"; }
+        else
+        {
+            h << "<table><tr><th>ID</th><th>Symbol</th><th>Type</th>"
+                 "<th>Price</th><th>Qty</th><th>Cost</th><th>Buy Fee</th><th>Sell Fee</th><th>Net Cost</th><th>TP</th><th>SL</th><th>SL?</th>"
+                 "<th>Sold</th><th>Rem</th><th>Actions</th></tr>";
+            for (const auto& t : trades)
+            {
+                double sold = db.soldQuantityForParent(t.tradeId);
+                bool isBuy = (t.type == TradeType::Buy);
+                double grossCost = t.value * t.quantity;
+                double netCost = grossCost + t.buyFee + t.sellFee;
+                h << "<tr><td><a href='/horizons?tradeId=" << t.tradeId << "'>" << t.tradeId << "</a></td>"
+                  << "<td>" << html::esc(t.symbol) << "</td>"
+                  << "<td class='" << (isBuy ? "buy" : "sell") << "'>" << (isBuy ? "BUY" : "SELL") << "</td>"
+                  << "<td>" << t.value << "</td><td>" << t.quantity << "</td>"
+                  << "<td>" << grossCost << "</td>"
+                  << "<td>" << t.buyFee << "</td><td>" << t.sellFee << "</td>"
+                  << "<td>" << netCost << "</td>"
+                  << "<td>" << t.takeProfit << "</td><td>" << t.stopLoss << "</td>"
+                  << "<td class='" << (t.stopLossActive ? "on" : "off") << "'>"
+                  << (t.stopLossActive ? "ON" : "OFF") << "</td>"
+                  << "<td>" << sold << "</td><td>" << (t.quantity - sold) << "</td>"
+                  << "<td>"
+                  << "<a class='btn btn-sm' href='/edit-trade?id=" << t.tradeId << "'>Edit</a> "
+                  << "<form class='iform' method='POST' action='/toggle-sl'>"
+                  << "<input type='hidden' name='id' value='" << t.tradeId << "'>"
+                  << "<button class='btn-sm btn-warn'>SL</button></form> "
+                  << "<form class='iform' method='POST' action='/delete-trade'>"
+                  << "<input type='hidden' name='id' value='" << t.tradeId << "'>"
+                  << "<button class='btn-sm btn-danger'>Del</button></form>"
+                  << "</td></tr>";
+            }
+            h << "</table>";
+        }
+        h << "<div class='forms-row'>";
+        h << "<form class='card' method='POST' action='/execute-buy'>"
+             "<h3>Execute Buy</h3>"
+             "<div style='color:#8b949e;font-size:0.78em;margin-bottom:8px;'>Creates trade &amp; debits wallet</div>"
+             "<label>Symbol</label><input type='text' name='symbol' required><br>"
+             "<label>Price</label><input type='number' name='price' step='any' required><br>"
+             "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+             "<label>Buy Fee</label><input type='number' name='buyFee' step='any' value='0'><br>"
+             "<button>Execute Buy</button></form>";
+        h << "<form class='card' method='POST' action='/execute-sell'>"
+             "<h3>Execute Sell</h3>"
+             "<div style='color:#8b949e;font-size:0.78em;margin-bottom:8px;'>Deducts from symbol holdings &amp; credits wallet</div>"
+             "<label>Symbol</label><input type='text' name='symbol' required><br>"
+             "<label>Price</label><input type='number' name='price' step='any' required><br>"
+             "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+             "<label>Sell Fee</label><input type='number' name='sellFee' step='any' value='0'><br>"
+             "<button>Execute Sell</button></form>";
+        h << "<form class='card' method='POST' action='/add-trade'>"
+             "<h3>Import Buy</h3>"
+             "<div style='color:#8b949e;font-size:0.78em;margin-bottom:8px;'>Record only &mdash; no wallet movement</div>"
+             "<input type='hidden' name='type' value='Buy'>"
+             "<label>Symbol</label><input type='text' name='symbol' required><br>"
+             "<label>Price</label><input type='number' name='price' step='any' required><br>"
+             "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+             "<label>Buy Fee</label><input type='number' name='buyFee' step='any' value='0'><br>"
+             "<button>Import Buy</button></form>";
+        h << "<form class='card' method='POST' action='/add-trade'>"
+             "<h3>Import Sell</h3>"
+             "<div style='color:#8b949e;font-size:0.78em;margin-bottom:8px;'>Record only &mdash; no wallet movement</div>"
+             "<input type='hidden' name='type' value='CoveredSell'>"
+             "<label>Symbol</label><input type='text' name='symbol' required><br>"
+             "<label>Parent Buy ID</label><input type='number' name='parentTradeId' required><br>"
+             "<label>Price</label><input type='number' name='price' step='any' required><br>"
+             "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
+             "<label>Sell Fee</label><input type='number' name='sellFee' step='any' value='0'><br>"
+             "<button>Import Sell</button></form>";
+        h << "</div>";
+        res.set_content(html::wrap("Trades", h.str()), "text/html");
+    });
+
+    // ========== POST /add-trade ==========
+    svr.Post("/add-trade", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        Trade t;
+        t.tradeId = db.nextTradeId();
+        t.symbol = normalizeSymbol(fv(f, "symbol"));
+        t.type = (fv(f, "type") == "CoveredSell") ? TradeType::CoveredSell : TradeType::Buy;
+        t.value = fd(f, "price");
+        t.quantity = fd(f, "quantity");
+        t.stopLossActive = false;
+        t.shortEnabled = false;
+        if (t.value <= 0 || t.quantity <= 0) { res.set_redirect("/trades?err=Price+and+quantity+must+be+positive", 303); return; }
+        if (t.type == TradeType::Buy)
+        {
+            t.parentTradeId = -1;
+            t.buyFee = fd(f, "buyFee");
+            t.sellFee = 0.0;
+        }
+        else
+        {
+            t.parentTradeId = fi(f, "parentTradeId", -1);
+            auto trades = db.loadTrades();
+            auto* parent = db.findTradeById(trades, t.parentTradeId);
+            if (!parent || parent->type != TradeType::Buy)
+            {
+                res.set_redirect("/trades?err=Parent+must+be+an+existing+Buy+trade", 303);
+                return;
+            }
+            t.buyFee = 0.0;
+            t.sellFee = fd(f, "sellFee");
+        }
+        db.addTrade(t);
+        res.set_redirect("/trades?msg=Trade+" + std::to_string(t.tradeId) + "+created", 303);
+    });
+
+    // ========== POST /delete-trade ==========
+    svr.Post("/delete-trade", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        auto trades = db.loadTrades();
+        if (!db.findTradeById(trades, id)) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
+        db.removeTrade(id);
+        res.set_redirect("/trades?msg=Trade+" + std::to_string(id) + "+deleted", 303);
+    });
+
+    // ========== POST /toggle-sl ==========
+    svr.Post("/toggle-sl", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
+        tp->stopLossActive = !tp->stopLossActive;
+        db.updateTrade(*tp);
+        std::string state = tp->stopLossActive ? "ON" : "OFF";
+        res.set_redirect("/trades?msg=SL+now+" + state + "+for+" + std::to_string(id), 303);
+    });
+
+    // ========== POST /execute-buy ==========
+    svr.Post("/execute-buy", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double price = fd(f, "price");
+        double qty = fd(f, "quantity");
+        double fee = fd(f, "buyFee");
+        if (sym.empty() || price <= 0 || qty <= 0) { res.set_redirect("/trades?err=Invalid+buy+parameters", 303); return; }
+        double walBal = db.loadWalletBalance();
+        double needed = price * qty + fee;
+        if (needed > walBal) { res.set_redirect("/trades?err=Insufficient+funds", 303); return; }
+        int bid = db.executeBuy(sym, price, qty, fee);
+        res.set_redirect("/trades?msg=Buy+" + std::to_string(bid) + "+executed", 303);
+    });
+
+    // ========== POST /execute-sell ==========
+    svr.Post("/execute-sell", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double price = fd(f, "price");
+        double qty = fd(f, "quantity");
+        double fee = fd(f, "sellFee");
+        if (sym.empty() || price <= 0 || qty <= 0) { res.set_redirect("/trades?err=Invalid+sell+parameters", 303); return; }
+        int sid = db.executeSell(sym, price, qty, fee);
+        if (sid < 0) { res.set_redirect("/trades?err=Sell+failed+(insufficient+holdings)", 303); return; }
+        res.set_redirect("/trades?msg=Sell+" + std::to_string(sid) + "+executed", 303);
+    });
+
+    // ========== GET /edit-trade ==========
+    svr.Get("/edit-trade", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        int id = 0;
+        try { id = std::stoi(req.get_param_value("id")); } catch (...) {}
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        if (!tp) { h << "<h1>Edit Trade</h1><div class='msg err'>Trade not found</div>"; }
+        else
+        {
+            bool isBuy = (tp->type == TradeType::Buy);
+            h << "<h1>Edit Trade #" << tp->tradeId << "</h1>"
+                 "<form class='card' method='POST' action='/edit-trade'>"
+                 "<input type='hidden' name='id' value='" << tp->tradeId << "'>"
+                 "<label>Symbol</label><input type='text' name='symbol' value='" << html::esc(tp->symbol) << "'><br>"
+                 "<label>Type</label><select name='type'>"
+                 "<option value='Buy'" << (isBuy ? " selected" : "") << ">Buy</option>"
+                 "<option value='CoveredSell'" << (!isBuy ? " selected" : "") << ">CoveredSell</option>"
+                 "</select><br>"
+                 "<label>Price</label><input type='number' name='price' step='any' value='" << tp->value << "'><br>"
+                 "<label>Quantity</label><input type='number' name='quantity' step='any' value='" << tp->quantity << "'><br>";
+            if (!isBuy)
+                h << "<label>Parent Buy ID</label><input type='number' name='parentTradeId' value='" << tp->parentTradeId << "'><br>";
+            if (isBuy)
+                h << "<label>Buy Fee</label><input type='number' name='buyFee' step='any' value='" << tp->buyFee << "'><br>";
+            else
+                h << "<label>Sell Fee</label><input type='number' name='sellFee' step='any' value='" << tp->sellFee << "'><br>";
+            if (isBuy)
+                h << "<label>Take Profit</label><input type='number' name='takeProfit' step='any' value='" << tp->takeProfit << "'><br>"
+                     "<label>Stop Loss</label><input type='number' name='stopLoss' step='any' value='" << tp->stopLoss << "'><br>"
+                     "<label>SL Active</label><select name='stopLossActive'>"
+                     "<option value='0'" << (!tp->stopLossActive ? " selected" : "") << ">OFF</option>"
+                     "<option value='1'" << (tp->stopLossActive ? " selected" : "") << ">ON</option>"
+                     "</select><br>";
+            h << "<br><button>Save Changes</button></form>";
+        }
+        h << "<br><a class='btn' href='/trades'>Back to Trades</a>";
+        res.set_content(html::wrap("Edit Trade", h.str()), "text/html");
+    });
+
+    // ========== POST /edit-trade ==========
+    svr.Post("/edit-trade", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
+        auto sym = fv(f, "symbol");
+        if (!sym.empty()) tp->symbol = normalizeSymbol(sym);
+        auto typeStr = fv(f, "type");
+        if (!typeStr.empty()) tp->type = (typeStr == "CoveredSell") ? TradeType::CoveredSell : TradeType::Buy;
+        double price = fd(f, "price");
+        if (price > 0) tp->value = price;
+        double qty = fd(f, "quantity");
+        if (qty > 0) tp->quantity = qty;
+        if (tp->type == TradeType::Buy)
+        {
+            tp->parentTradeId = -1;
+            tp->buyFee = fd(f, "buyFee", tp->buyFee);
+            tp->sellFee = 0.0;
+        }
+        else
+        {
+            int pid = fi(f, "parentTradeId", tp->parentTradeId);
+            auto* parent = db.findTradeById(trades, pid);
+            if (!parent || parent->type != TradeType::Buy)
+            {
+                res.set_redirect("/trades?err=Parent+must+be+an+existing+Buy+trade", 303);
+                return;
+            }
+            tp->parentTradeId = pid;
+            tp->buyFee = 0.0;
+            tp->sellFee = fd(f, "sellFee", tp->sellFee);
+        }
+        tp->takeProfit = fd(f, "takeProfit", tp->takeProfit);
+        tp->stopLoss = fd(f, "stopLoss", tp->stopLoss);
+        auto slStr = fv(f, "stopLossActive");
+        if (!slStr.empty()) tp->stopLossActive = (slStr == "1");
+        db.updateTrade(*tp);
+        res.set_redirect("/trades?msg=Trade+" + std::to_string(id) + "+updated", 303);
+    });
+}

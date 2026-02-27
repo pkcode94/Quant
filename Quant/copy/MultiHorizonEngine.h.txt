@@ -6,37 +6,51 @@
 
 // TP/SL horizon formula:
 //
-//   overhead = ((sellFees + buyFees) * feeHedgingCoefficient + feeSpread * deltaTime)
+//   overhead = (feeSpread * feeHedgingCoefficient * deltaTime)
 //            * symbolCount
 //            / ((price / quantity) * portfolioPump + coefficientK)
 //
-//   effective = overhead + surplusRate
+//   effective = overhead + surplusRate * feeHedgingCoefficient * deltaTime
+//                        + feeSpread * feeHedgingCoefficient * deltaTime
 //   positionDelta = (price * quantity) / portfolioPump
 //
 //   TP[i] = entry * qty * (1 + effective * (i + 1))
 //   SL[i] = entry * qty * (1 - effective * (i + 1))
 //
-// overhead scales fee costs by symbolCount and normalises against a
+// levelTP is governed by maxRisk: when maxRisk = 0 the TP is 0 (no
+// target).  As maxRisk increases the TP scales from break-even toward
+// the ceiling, sigmoid-distributed across levels with half-steepness
+// and (i+1)/(N+1) mapping so every level visibly responds.
+// riskCoefficient warps the TP sigmoid to mirror funding allocation:
+//   risk=0 ? forward sigmoid (higher prices get higher TP, conservative)
+//   risk=0.5 ? uniform midpoint TP across all levels
+//   risk=1 ? inverse sigmoid (lower prices get higher TP, aggressive)
+//
+// overhead scales fee spread by symbolCount and normalises against a
 // denominator built from the per-unit price ratio and pump capital.
+// feeHedgingCoefficient is a safety multiplier on the fee spread.
 // coefficientK is an additive offset in the denominator.
 // positionDelta is the portfolio weight of this trade.
 // surplusRate is pure profit margin on top of break-even.
 // horizonCount controls how many levels are generated.
+//
+// Absolute fees (buyFee / sellFee) are tracked per-trade on Trade
+// and per-level on ExitLevel — not in HorizonParams.
 
 struct HorizonParams
 {
-    double buyFees                    = 0.0;   // specified per calculation
-    double sellFees                   = 0.0;   // specified per calculation
     double feeHedgingCoefficient      = 1.0;
     double portfolioPump              = 0.0;   // portfolio pump for time t
     int    symbolCount                = 1;     // number of symbols in portfolio
     double coefficientK               = 0.0;
-    double feeSpread                  = 0.0;   // fee spread / slippage for this symbol
+    double feeSpread                  = 0.0;   // fee spread / slippage rate
     double deltaTime                  = 1.0;   // time delta
     double surplusRate                = 0.0;   // profit margin above break-even (e.g. 0.02 = 2%)
     int    horizonCount               = 1;     // how many TP/SL levels to generate
     bool   generateStopLosses         = false; // stop losses deactivated by default
     bool   allowShortTrades           = false; // short trades disabled by default
+    double maxRisk                    = 0.0;   // max TP fraction above entry (0 = disabled)
+    double minRisk                    = 0.0;   // min TP fraction above break-even (floor)
 };
 
 struct HorizonLevel
@@ -52,11 +66,8 @@ class MultiHorizonEngine
 public:
     static double computeOverhead(double price, double quantity, const HorizonParams& p)
     {
-        double feeComponent =
-            (p.sellFees + p.buyFees) * p.feeHedgingCoefficient;
-        double spreadComponent = p.feeSpread * p.deltaTime;
-        double numerator = (feeComponent + spreadComponent)
-                         * static_cast<double>(p.symbolCount);
+        double feeComponent = p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
+        double numerator = feeComponent * static_cast<double>(p.symbolCount);
         double pricePerQty = (quantity > 0.0) ? price / quantity : 0.0;
         double denominator = pricePerQty * p.portfolioPump + p.coefficientK;
         return (denominator != 0.0) ? numerator / denominator : 0.0;
@@ -69,7 +80,9 @@ public:
 
     static double effectiveOverhead(double price, double quantity, const HorizonParams& p)
     {
-        return computeOverhead(price, quantity, p) + p.surplusRate;
+        return computeOverhead(price, quantity, p)
+             + p.surplusRate * p.feeHedgingCoefficient * p.deltaTime
+             + p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
     }
 
     static double effectiveOverhead(const Trade& trade, const HorizonParams& p)
@@ -93,6 +106,81 @@ public:
         return trade.quantity + fundedQuantity(trade.value, p);
     }
 
+    static double sigmoid(double x)
+    {
+        return 1.0 / (1.0 + std::exp(-x));
+    }
+
+    // Per-level TP controlled by maxRisk.
+    // maxRisk = 0  ->  TP = 0  (no take-profit target).
+    // maxRisk > 0  ->  TP ceiling = referencePrice * (1 + maxRisk) for LONG.
+    //
+    // The TP floor (break-even) is always per-entry: entryPrice * (1 + eo).
+    // The TP ceiling uses referencePrice (the highest entry in the set,
+    // typically currentPrice or priceHigh) so the ceiling is fixed across
+    // all levels.  This prevents a bell-curve when entry prices span a
+    // wide range: the ceiling is constant, only the sigmoid norm varies.
+    //
+    // riskCoefficient warps the TP distribution (mirrors funding):
+    //   risk=0   -> forward sigmoid (higher price levels get higher TP)
+    //   risk=0.5 -> uniform (all levels get midpoint TP)
+    //   risk=1   -> inverse sigmoid (lower price levels get higher TP)
+    //
+    // referencePrice: the highest entry price in the set (or currentPrice).
+    //   When 0, falls back to entryPrice (legacy single-entry behaviour).
+    static double levelTP(double entryPrice, double overhead, double eo,
+                          const HorizonParams& p, double steepness,
+                          int levelIndex, int totalLevels, bool isShort,
+                          double riskCoefficient = 0.5,
+                          double referencePrice = 0.0)
+    {
+        if (p.maxRisk <= 0.0)
+            return 0.0;
+
+        double risk = (riskCoefficient < 0.0) ? 0.0
+                    : (riskCoefficient > 1.0) ? 1.0
+                    : riskCoefficient;
+
+        double tpRef = (referencePrice > 0.0) ? referencePrice : entryPrice;
+
+        // Halve steepness so the TP sigmoid doesn't compress to the
+        // same extremes as the already-sigmoidal entry prices.
+        double steep = (steepness > 0.1) ? steepness * 0.5 : 0.1;
+        double s0 = sigmoid(-steep * 0.5);
+        double s1 = sigmoid( steep * 0.5);
+        double sR = (s1 - s0 > 0.0) ? s1 - s0 : 1.0;
+        // (i+1)/(N+1) keeps t inside (0,1) so every level moves.
+        double t = static_cast<double>(levelIndex + 1)
+                 / static_cast<double>(totalLevels + 1);
+        double rawNorm = (sigmoid(steep * (t - 0.5)) - s0) / sR;
+
+        // risk warps the curve: risk=1 inverts so lower prices get higher TP
+        double norm = (1.0 - risk) * rawNorm + risk * (1.0 - rawNorm);
+
+        if (!isShort)
+        {
+            double minTP = entryPrice * (1.0 + eo + p.minRisk);
+            double maxTP = tpRef * (1.0 + p.maxRisk);
+            if (maxTP <= minTP) return minTP;
+            return minTP + norm * (maxTP - minTP);
+        }
+        else
+        {
+            double maxTP = entryPrice * (1.0 - eo - p.minRisk);
+            if (maxTP < 0.0) maxTP = 0.0;
+            double floorTP = tpRef * (1.0 - p.maxRisk);
+            if (floorTP < 0.0) floorTP = 0.0;
+            if (floorTP >= maxTP) return maxTP;
+            return maxTP - norm * (maxTP - floorTP);
+        }
+    }
+
+    static double levelSL(double entryPrice, double eo, bool isShort)
+    {
+        double sl = isShort ? entryPrice * (1.0 + eo) : entryPrice * (1.0 - eo);
+        return (sl < 0.0) ? 0.0 : sl;
+    }
+
     static std::vector<HorizonLevel> generate(const Trade& trade,
                                               const HorizonParams& p)
     {
@@ -102,9 +190,34 @@ public:
         double base     = trade.value * trade.quantity;
         double eo       = effectiveOverhead(trade, p);
 
+        bool useMaxRisk = (p.maxRisk > 0.0 && p.maxRisk > trade.value);
+        double mrMinF = 0, mrMaxF = 0, mrS0 = 0, mrSR = 1;
+        if (useMaxRisk)
+        {
+            mrMinF = computeOverhead(trade, p);
+            mrMaxF = (p.maxRisk / trade.value) - 1.0;
+            if (mrMaxF < mrMinF) mrMaxF = mrMinF;
+            double steep = 4.0;
+            mrS0 = sigmoid(-steep * 0.5);
+            double mrS1 = sigmoid(steep * 0.5);
+            mrSR = (mrS1 - mrS0 > 0) ? mrS1 - mrS0 : 1.0;
+        }
+
         for (int i = 0; i < p.horizonCount; ++i)
         {
-            double factor = eo * static_cast<double>(i + 1);
+            double factor;
+            if (useMaxRisk)
+            {
+                double t = (p.horizonCount > 1)
+                         ? static_cast<double>(i) / static_cast<double>(p.horizonCount - 1)
+                         : 1.0;
+                double norm = (sigmoid(4.0 * (t - 0.5)) - mrS0) / mrSR;
+                factor = mrMinF + norm * (mrMaxF - mrMinF);
+            }
+            else
+            {
+                factor = eo * static_cast<double>(i + 1);
+            }
 
             HorizonLevel hl;
             hl.index     = i;

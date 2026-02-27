@@ -1,0 +1,421 @@
+#pragma once
+
+#include "AppContext.h"
+#include "HtmlHelpers.h"
+#include "ExitStrategyCalculator.h"
+#include <mutex>
+#include <algorithm>
+
+inline void registerExitRoutes(httplib::Server& svr, AppContext& ctx)
+{
+    auto& db = ctx.defaultDb;
+    auto& dbMutex = ctx.dbMutex;
+
+    // ========== GET /exit-strategy � form ==========
+    svr.Get("/exit-strategy", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        if (!db.hasBuyTrades())
+        {
+            res.set_redirect("/market-entry?err=Add+buy+trades+first", 303);
+            return;
+        }
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        { bool canH = db.hasBuyTrades();
+          h << html::workflow(2, canH, canH); }
+        h << "<h1>Exit Strategy Calculator</h1>"
+             "<form class='card' method='POST' action='/exit-strategy'><h3>Parameters</h3>"
+             "<label>Trade IDs</label><input type='text' name='tradeIds' placeholder='1,2,3' required><br>"
+             "<label>Risk</label><input type='number' name='risk' step='any' value='0.5'><br>"
+             "<label>Exit Fraction</label><input type='number' name='exitFraction' step='any' value='1.0'><br>"
+             "<label>Steepness</label><input type='number' name='steepness' step='any' value='4.0'><br>"
+             "<label>Fee Hedging</label><input type='number' name='feeHedgingCoefficient' step='any' value='1'><br>"
+             "<label>Symbol Count</label><input type='number' name='symbolCount' value='1'><br>"
+             "<label>Coefficient K</label><input type='number' name='coefficientK' step='any' value='0'><br>"
+             "<label>Fee Spread</label><input type='number' name='feeSpread' step='any' value='0'><br>"
+             "<label>Delta Time</label><input type='number' name='deltaTime' step='any' value='1'><br>"
+             "<label>Surplus Rate</label><input type='number' name='surplusRate' step='any' value='0.02'><br>"
+             "<label>Max Risk</label><input type='number' name='maxRisk' step='any' value='0'><br>"
+             "<label>Min Risk</label><input type='number' name='minRisk' step='any' value='0'><br>"
+             "<button>Calculate</button></form>";
+        auto trades = db.loadTrades();
+        bool any = false;
+        for (const auto& t : trades) if (t.type == TradeType::Buy) { any = true; break; }
+        if (any)
+        {
+            h << "<h2>Buy Trades</h2><table><tr><th>ID</th><th>Symbol</th><th>Price</th>"
+                 "<th>Qty</th><th>Buy Fee</th><th>Sold</th><th>Pending</th><th>Remaining</th></tr>";
+            auto pending = db.loadPendingExits();
+            for (const auto& t : trades)
+            {
+                if (t.type != TradeType::Buy) continue;
+                double sold = db.soldQuantityForParent(t.tradeId);
+                double pQty = 0;
+                for (const auto& pe : pending)
+                    if (pe.tradeId == t.tradeId) pQty += pe.sellQty;
+                h << "<tr><td>" << t.tradeId << "</td><td>" << html::esc(t.symbol) << "</td>"
+                  << "<td>" << t.value << "</td><td>" << t.quantity << "</td>"
+                  << "<td>" << t.buyFee << "</td>"
+                  << "<td>" << sold << "</td><td>" << pQty << "</td>"
+                  << "<td>" << (t.quantity - sold - pQty) << "</td></tr>";
+            }
+            h << "</table>";
+        }
+        res.set_content(html::wrap("Exit Strategy", h.str()), "text/html");
+    });
+
+    // ========== POST /exit-strategy � show results + confirm form ==========
+    svr.Post("/exit-strategy", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        std::string idsStr = fv(f, "tradeIds");
+        double risk = fd(f, "risk");
+        double exitFrac = fd(f, "exitFraction", 1.0);
+        double steep = fd(f, "steepness", 4.0);
+        HorizonParams p;
+        p.horizonCount = 1;
+        p.feeHedgingCoefficient = fd(f, "feeHedgingCoefficient", 1.0);
+        p.symbolCount = fi(f, "symbolCount", 1);
+        p.coefficientK = fd(f, "coefficientK");
+        p.feeSpread = fd(f, "feeSpread");
+        p.deltaTime = fd(f, "deltaTime", 1.0);
+        p.surplusRate = fd(f, "surplusRate");
+        p.maxRisk = fd(f, "maxRisk");
+        p.minRisk = fd(f, "minRisk");
+        std::vector<int> ids;
+        { std::istringstream ss(idsStr); std::string tok;
+          while (std::getline(ss, tok, ',')) { try { ids.push_back(std::stoi(tok)); } catch (...) {} } }
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        if (ids.empty()) { h << "<div class='msg err'>No trade IDs entered</div>"; }
+        else
+        {
+            auto trades = db.loadTrades();
+            auto existingPending = db.loadPendingExits();
+            int levelCounter = 0;
+            bool anyLevels = false;
+            std::vector<std::string> exitSymbols;
+            { bool canH = db.hasBuyTrades(); h << html::workflow(2, canH, canH); }
+            h << "<h1>Exit Strategy</h1>";
+            h << "<form class='card' method='POST' action='/confirm-exits'>"
+                 "<input type='hidden' name='tradeIds' value='" << html::esc(idsStr) << "'>"
+                 "<input type='hidden' name='risk' value='" << risk << "'>"
+                 "<input type='hidden' name='exitFraction' value='" << exitFrac << "'>"
+                 "<input type='hidden' name='steepness' value='" << steep << "'>"
+                 "<input type='hidden' name='feeHedgingCoefficient' value='" << p.feeHedgingCoefficient << "'>"
+                 "<input type='hidden' name='symbolCount' value='" << p.symbolCount << "'>"
+                 "<input type='hidden' name='coefficientK' value='" << p.coefficientK << "'>"
+                 "<input type='hidden' name='feeSpread' value='" << p.feeSpread << "'>"
+                 "<input type='hidden' name='deltaTime' value='" << p.deltaTime << "'>"
+                 "<input type='hidden' name='surplusRate' value='" << p.surplusRate << "'>";
+            for (int id : ids)
+            {
+                auto* tp = db.findTradeById(trades, id);
+                if (!tp || tp->type != TradeType::Buy)
+                { h << "<div class='msg err'>#" << id << " is not a Buy trade</div>"; continue; }
+                double sold = db.soldQuantityForParent(tp->tradeId);
+                double pendingQty = 0;
+                for (const auto& pe : existingPending)
+                    if (pe.tradeId == tp->tradeId) pendingQty += pe.sellQty;
+                double remaining = tp->quantity - sold - pendingQty;
+                if (remaining <= 0)
+                { h << "<div class='msg err'>#" << id << " " << html::esc(tp->symbol)
+                     << " fully committed (sold=" << sold << " pending=" << pendingQty << ")</div>"; continue; }
+                Trade tempTrade = *tp;
+                double remainFrac = (tp->quantity > 0) ? remaining / tp->quantity : 0.0;
+                tempTrade.quantity = remaining;
+                tempTrade.buyFee = tp->buyFee * remainFrac;
+                auto levels = ExitStrategyCalculator::generate(tempTrade, p, risk, exitFrac, steep);
+                double clampedFrac = (exitFrac < 0) ? 0 : (exitFrac > 1) ? 1 : exitFrac;
+                double sellableQty = remaining * clampedFrac;
+                h << "<h2>Exit #" << tp->tradeId << " " << html::esc(tp->symbol)
+                  << " (entry=" << tp->value << ")</h2>"
+                     "<div class='row'>"
+                     "<div class='stat'><div class='lbl'>Total</div><div class='val'>" << tp->quantity << "</div></div>"
+                     "<div class='stat'><div class='lbl'>Sold</div><div class='val'>" << sold << "</div></div>"
+                     "<div class='stat'><div class='lbl'>Pending</div><div class='val'>" << pendingQty << "</div></div>"
+                     "<div class='stat'><div class='lbl'>Available</div><div class='val'>" << remaining << "</div></div>"
+                     "<div class='stat'><div class='lbl'>Selling</div><div class='val'>" << sellableQty << "</div></div>"
+                     "</div>";
+                {
+                    double tradeEo = MultiHorizonEngine::effectiveOverhead(tempTrade, p);
+                    std::ostringstream con;
+                    con << std::fixed << std::setprecision(8);
+                    con << "<details><summary style='cursor:pointer;color:#c9a44a;font-size:0.85em;margin:4px 0;'>"
+                           "&#9654; Calculation Steps</summary><div class='calc-console'>";
+                    con << html::traceOverhead(tempTrade.value, tempTrade.quantity, p);
+                    con << "<span class='hd'>Sigmoid Distribution</span>"
+                        << "risk = <span class='vl'>" << risk << "</span>"
+                        << "  steepness = <span class='vl'>" << steep << "</span>"
+                        << "  exitFraction = <span class='vl'>" << exitFrac << "</span>\n"
+                        << "sellableQty = " << remaining << " &times; " << clampedFrac
+                        << " = <span class='vl'>" << sellableQty << "</span>\n"
+                        << "buyFee (pro-rated) = <span class='vl'>" << tempTrade.buyFee << "</span>\n";
+                    con << "<span class='hd'>Exit Levels</span>";
+                    for (const auto& el : levels)
+                    {
+                        if (el.sellQty <= 0) continue;
+                        double factor = tradeEo * (el.index + 1);
+                        con << "\n<span class='vl'>Level " << el.index << "</span>\n"
+                            << "  tpPrice      = " << tp->value << " &times; (1 + " << factor << ") = <span class='vl'>" << el.tpPrice << "</span>\n"
+                            << "  sellFraction = <span class='vl'>" << (el.sellFraction * 100) << "%</span>"
+                            << "  sellQty = <span class='vl'>" << el.sellQty << "</span>\n"
+                            << "  grossProfit  = (" << el.tpPrice << " - " << tp->value << ") &times; " << el.sellQty
+                            << " = <span class='vl'>" << el.grossProfit << "</span>\n"
+                            << "  levelBuyFee  = " << tempTrade.buyFee << " &times; " << el.sellFraction
+                            << " = <span class='vl'>" << el.levelBuyFee << "</span>\n"
+                            << "  <span class='rs'>netProfit</span>    = " << el.grossProfit << " - " << el.levelBuyFee
+                            << " = <span class='rs'>" << el.netProfit << "</span>\n";
+                    }
+                    con << "</div></details>";
+                    h << con.str();
+                }
+                h << "<table><tr><th>Lvl</th><th>TP Price</th><th>Sell Qty</th>"
+                     "<th>Fraction</th><th>Value</th><th>Gross</th>"
+                     "<th>Buy Fee</th><th>Sell Fee</th></tr>";
+                std::ostringstream hiddenFields;
+                hiddenFields << std::fixed << std::setprecision(17);
+                for (const auto& el : levels)
+                {
+                    if (el.sellQty <= 0) continue;
+                    double pct = tp->value > 0 ? ((el.tpPrice - tp->value) / tp->value * 100) : 0;
+                    h << "<tr><td>" << el.index << "</td>"
+                      << "<td>" << el.tpPrice << " (+" << pct << "%)</td>"
+                      << "<td>" << el.sellQty << "</td>"
+                      << "<td>" << (el.sellFraction * 100) << "%</td>"
+                      << "<td>" << el.sellValue << "</td>"
+                      << "<td>" << el.grossProfit << "</td>"
+                      << "<td><input type='number' name='buyFee_" << levelCounter
+                      << "' step='any' value='" << el.levelBuyFee << "' style='width:80px;'></td>"
+                      << "<td><input type='number' name='sellFee_" << levelCounter
+                      << "' step='any' value='" << el.levelSellFee << "' style='width:80px;'></td></tr>";
+                    hiddenFields << "<input type='hidden' name='tid_" << levelCounter << "' value='" << tp->tradeId << "'>"
+                      << "<input type='hidden' name='sym_" << levelCounter << "' value='" << html::esc(tp->symbol) << "'>"
+                      << "<input type='hidden' name='tp_" << levelCounter << "' value='" << el.tpPrice << "'>"
+                      << "<input type='hidden' name='qty_" << levelCounter << "' value='" << el.sellQty << "'>"
+                      << "<input type='hidden' name='gross_" << levelCounter << "' value='" << el.grossProfit << "'>"
+                      << "<input type='hidden' name='lvl_" << levelCounter << "' value='" << el.index << "'>";
+                    ++levelCounter;
+                    anyLevels = true;
+                }
+                h << "</table>";
+                h << hiddenFields.str();
+                if (std::find(exitSymbols.begin(), exitSymbols.end(), tp->symbol) == exitSymbols.end())
+                    exitSymbols.push_back(tp->symbol);
+                h << "<div style='color:#475569;font-size:0.82em;'>Remaining after exit: "
+                  << (remaining - sellableQty) << "</div>";
+                db.saveParamsSnapshot(
+                    TradeDatabase::ParamsRow::from("exit", tp->symbol, tp->tradeId,
+                                                   tp->value, tp->quantity, p, risk,
+                                                   tp->buyFee, tp->sellFee));
+            }
+            h << "<input type='hidden' name='levelCount' value='" << levelCounter << "'>";
+            if (anyLevels)
+            {
+                h << "<br><h3 style='color:#c9a44a;'>Confirm Exits</h3>";
+                for (const auto& es : exitSymbols)
+                {
+                    h << "<label>" << html::esc(es) << " Price</label>"
+                      << "<input type='number' name='price_" << html::esc(es)
+                      << "' step='any' required><br>";
+                }
+                h << "<br><button>Confirm &amp; Execute</button>";
+            }
+            h << "</form>";
+        }
+        h << "<br><a class='btn' href='/exit-strategy'>Back</a>";
+        res.set_content(html::wrap("Exit Results", h.str()), "text/html");
+    });
+
+    // ========== POST /confirm-exits � execute triggered + save pending ==========
+    svr.Post("/confirm-exits", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int levelCount = fi(f, "levelCount");
+        auto priceFor = [&](const std::string& sym) -> double { return fd(f, "price_" + sym, 0.0); };
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << "<h1>Exit Execution</h1>";
+        if (levelCount <= 0)
+        { h << "<div class='msg err'>Invalid parameters</div><br><a class='btn' href='/exit-strategy'>Back</a>";
+          res.set_content(html::wrap("Exit Execution", h.str()), "text/html"); return; }
+        struct ExitOrder { int tradeId; std::string symbol; double triggerPrice; double sellQty;
+            double grossProfit; double buyFee; double sellFee; double netProfit; int levelIndex; };
+        std::vector<ExitOrder> allOrders;
+        double totalNet = 0;
+        for (int i = 0; i < levelCount; ++i)
+        {
+            std::string si = std::to_string(i);
+            ExitOrder eo;
+            eo.tradeId = fi(f, "tid_" + si); eo.symbol = fv(f, "sym_" + si);
+            eo.triggerPrice = fd(f, "tp_" + si); eo.sellQty = fd(f, "qty_" + si);
+            eo.grossProfit = fd(f, "gross_" + si); eo.buyFee = fd(f, "buyFee_" + si);
+            eo.sellFee = fd(f, "sellFee_" + si); eo.levelIndex = fi(f, "lvl_" + si);
+            eo.netProfit = eo.grossProfit - eo.buyFee - eo.sellFee;
+            totalNet += eo.netProfit;
+            allOrders.push_back(eo);
+        }
+        h << "<h2>Fee Summary</h2>"
+             "<table><tr><th>Trade</th><th>Symbol</th><th>Lvl</th><th>Trigger</th>"
+             "<th>Qty</th><th>Gross</th><th>Buy Fee</th><th>Sell Fee</th><th>Net</th></tr>";
+        for (const auto& eo : allOrders)
+        {
+            h << "<tr><td>" << eo.tradeId << "</td><td>" << html::esc(eo.symbol) << "</td>"
+              << "<td>" << eo.levelIndex << "</td><td>" << eo.triggerPrice << "</td>"
+              << "<td>" << eo.sellQty << "</td><td>" << eo.grossProfit << "</td>"
+              << "<td>" << eo.buyFee << "</td><td>" << eo.sellFee << "</td>"
+              << "<td class='" << (eo.netProfit >= 0 ? "buy" : "sell") << "'>" << eo.netProfit << "</td></tr>";
+        }
+        h << "</table>";
+        std::vector<std::string> exitSyms;
+        for (const auto& eo : allOrders)
+            if (std::find(exitSyms.begin(), exitSyms.end(), eo.symbol) == exitSyms.end())
+                exitSyms.push_back(eo.symbol);
+        h << "<div class='row'><div class='stat'><div class='lbl'>Total Net</div><div class='val'>" << totalNet << "</div></div>";
+        for (const auto& es : exitSyms)
+            h << "<div class='stat'><div class='lbl'>" << html::esc(es) << "</div><div class='val'>" << priceFor(es) << "</div></div>";
+        h << "</div>";
+        std::vector<ExitOrder> hitOrders, pendingOrders;
+        for (const auto& eo : allOrders)
+        { double cp = priceFor(eo.symbol); if (cp > 0 && cp >= eo.triggerPrice) hitOrders.push_back(eo); else pendingOrders.push_back(eo); }
+        int executed = 0;
+        if (!hitOrders.empty())
+        {
+            h << "<h2>Executed (" << hitOrders.size() << " at/above trigger)</h2>"
+                 "<table><tr><th>Trade</th><th>Symbol</th><th>Trigger</th><th>Qty</th><th>Sell ID</th><th>Status</th></tr>";
+            for (const auto& eo : hitOrders)
+            {
+                int sid = db.executeSellForTrade(eo.symbol, eo.triggerPrice, eo.sellQty, eo.sellFee, eo.tradeId);
+                if (sid >= 0)
+                { h << "<tr><td>" << eo.tradeId << "</td><td>" << html::esc(eo.symbol) << "</td><td>" << eo.triggerPrice << "</td>"
+                     << "<td>" << eo.sellQty << "</td><td class='buy'>#" << sid << "</td><td class='buy'>OK</td></tr>"; ++executed; }
+                else
+                { h << "<tr><td>" << eo.tradeId << "</td><td>" << html::esc(eo.symbol) << "</td><td>" << eo.triggerPrice << "</td>"
+                     << "<td>" << eo.sellQty << "</td><td>-</td><td class='sell'>FAILED</td></tr>"; }
+            }
+            h << "</table>";
+        }
+        int saved = 0;
+        if (!pendingOrders.empty())
+        {
+            int nextId = db.nextPendingId();
+            std::vector<TradeDatabase::PendingExit> peList;
+            for (const auto& eo : pendingOrders)
+            {
+                TradeDatabase::PendingExit pe;
+                pe.symbol = eo.symbol; pe.orderId = nextId++; pe.tradeId = eo.tradeId;
+                pe.triggerPrice = eo.triggerPrice; pe.sellQty = eo.sellQty; pe.levelIndex = eo.levelIndex;
+                peList.push_back(pe);
+            }
+            db.addPendingExits(peList);
+            saved = (int)peList.size();
+            h << "<h2>Pending (" << saved << " below trigger)</h2>"
+                 "<table><tr><th>Order</th><th>Trade</th><th>Symbol</th><th>Trigger</th><th>Qty</th><th>Away</th></tr>";
+            for (const auto& pe : peList)
+                h << "<tr><td>" << pe.orderId << "</td><td>" << pe.tradeId << "</td><td>" << html::esc(pe.symbol) << "</td>"
+                  << "<td>" << pe.triggerPrice << "</td><td>" << pe.sellQty << "</td><td>" << (pe.triggerPrice - priceFor(pe.symbol)) << "</td></tr>";
+            h << "</table>";
+        }
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Executed</div><div class='val'>" << executed << "</div></div>"
+             "<div class='stat'><div class='lbl'>Pending</div><div class='val'>" << saved << "</div></div>"
+             "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << db.loadWalletBalance() << "</div></div>"
+             "</div>";
+        h << "<div class='msg'>" << executed << " exit(s) executed, " << saved << " pending exit(s) saved.</div>";
+        h << "<br><a class='btn' href='/trades'>Trades</a> "
+             "<a class='btn' href='/pending-exits'>Pending Exits</a> "
+             "<a class='btn' href='/exit-strategy'>New Exit</a>";
+        res.set_content(html::wrap("Exit Execution", h.str()), "text/html");
+    });
+
+    // ========== GET /pending-exits ==========
+    svr.Get("/pending-exits", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << html::msgBanner(req) << html::errBanner(req);
+        h << "<h1>Pending Exits</h1>";
+        auto orders = db.loadPendingExits();
+        if (orders.empty()) { h << "<p class='empty'>(no pending exits)</p>"; }
+        else
+        {
+            h << "<table><tr><th>Order</th><th>Symbol</th><th>Trade</th>"
+                 "<th>Trigger</th><th>Qty</th><th>Level</th><th>Action</th></tr>";
+            for (const auto& pe : orders)
+                h << "<tr><td>" << pe.orderId << "</td><td>" << html::esc(pe.symbol) << "</td><td>" << pe.tradeId << "</td>"
+                  << "<td>" << pe.triggerPrice << "</td><td>" << pe.sellQty << "</td><td>" << pe.levelIndex << "</td>"
+                  << "<td><form class='iform' method='POST' action='/remove-pending'>"
+                  << "<input type='hidden' name='id' value='" << pe.orderId << "'>"
+                  << "<button class='btn-sm btn-danger'>Remove</button></form></td></tr>";
+            h << "</table>";
+            std::vector<std::string> peSyms;
+            for (const auto& pe : orders)
+                if (std::find(peSyms.begin(), peSyms.end(), pe.symbol) == peSyms.end()) peSyms.push_back(pe.symbol);
+            h << "<form class='card' method='POST' action='/confirm-pending-exits'><h3>Confirm Pending Exits</h3>";
+            for (const auto& sym : peSyms)
+                h << "<label>" << html::esc(sym) << " Price</label><input type='number' name='price_" << html::esc(sym) << "' step='any' required><br>";
+            h << "<table><tr><th>Order</th><th>Symbol</th><th>Trigger</th><th>Qty</th><th>Sell Fee</th></tr>";
+            for (const auto& pe : orders)
+                h << "<tr><td>" << pe.orderId << "</td><td>" << html::esc(pe.symbol) << "</td><td>" << pe.triggerPrice << "</td>"
+                  << "<td>" << pe.sellQty << "</td><td><input type='number' name='sellFee_" << pe.orderId << "' step='any' value='0' style='width:80px;'></td></tr>";
+            h << "</table><button>Confirm &amp; Execute</button></form>";
+        }
+        res.set_content(html::wrap("Pending Exits", h.str()), "text/html");
+    });
+
+    // ========== POST /remove-pending ==========
+    svr.Post("/remove-pending", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        db.removePendingExit(id);
+        res.set_redirect("/pending-exits?msg=Order+" + std::to_string(id) + "+removed", 303);
+    });
+
+    // ========== POST /confirm-pending-exits ==========
+    svr.Post("/confirm-pending-exits", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        auto orders = db.loadPendingExits();
+        auto priceFor = [&](const std::string& sym) -> double { return fd(f, "price_" + sym, 0.0); };
+        std::ostringstream h;
+        h << std::fixed << std::setprecision(17);
+        h << "<h1>Pending Exit Execution</h1>";
+        int executed = 0, skipped = 0;
+        std::vector<int> executedIds;
+        h << "<table><tr><th>Order</th><th>Symbol</th><th>Trigger</th><th>Market</th><th>Qty</th><th>Fee</th><th>Sell ID</th><th>Status</th></tr>";
+        for (const auto& pe : orders)
+        {
+            double cur = priceFor(pe.symbol);
+            double sellFee = fd(f, "sellFee_" + std::to_string(pe.orderId));
+            if (cur > 0 && cur >= pe.triggerPrice)
+            {
+                int sid = (pe.tradeId > 0) ? db.executeSellForTrade(pe.symbol, pe.triggerPrice, pe.sellQty, sellFee, pe.tradeId)
+                                           : db.executeSell(pe.symbol, pe.triggerPrice, pe.sellQty, sellFee);
+                if (sid >= 0)
+                { h << "<tr><td>" << pe.orderId << "</td><td>" << html::esc(pe.symbol) << "</td><td>" << pe.triggerPrice << "</td>"
+                     << "<td class='buy'>" << cur << "</td><td>" << pe.sellQty << "</td><td>" << sellFee << "</td>"
+                     << "<td class='buy'>#" << sid << "</td><td class='buy'>EXECUTED</td></tr>";
+                  executedIds.push_back(pe.orderId); ++executed; }
+                else
+                { h << "<tr><td>" << pe.orderId << "</td><td>" << html::esc(pe.symbol) << "</td><td>" << pe.triggerPrice << "</td>"
+                     << "<td>" << cur << "</td><td>" << pe.sellQty << "</td><td>" << sellFee << "</td>"
+                     << "<td>-</td><td class='sell'>FAILED</td></tr>"; }
+            }
+            else
+            { h << "<tr><td>" << pe.orderId << "</td><td>" << html::esc(pe.symbol) << "</td><td>" << pe.triggerPrice << "</td>"
+                 << "<td>" << cur << "</td><td>" << pe.sellQty << "</td><td>" << sellFee << "</td>"
+                 << "<td>-</td><td class='off'>BELOW TRIGGER</td></tr>"; ++skipped; }
+        }
+        h << "</table>";
+        for (int oid : executedIds) db.removePendingExit(oid);
+        h << "<div class='row'>"
+             "<div class='stat'><div class='lbl'>Executed</div><div class='val'>" << executed << "</div></div>"
+             "<div class='stat'><div class='lbl'>Skipped</div><div class='val'>" << skipped << "</div></div>"
+             "<div class='stat'><div class='lbl'>Wallet</div><div class='val'>" << db.loadWalletBalance() << "</div></div>"
+             "</div>";
+        h << "<br><a class='btn' href='/trades'>Trades</a> <a class='btn' href='/pending-exits'>Pending Exits</a>";
+        res.set_content(html::wrap("Pending Exit Execution", h.str()), "text/html");
+    });
+}

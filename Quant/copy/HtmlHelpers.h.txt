@@ -1,0 +1,284 @@
+#pragma once
+
+#include "Trade.h"
+#include "ProfitCalculator.h"
+#include "MultiHorizonEngine.h"
+#include "cpp-httplib-master\httplib.h"
+
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <map>
+#include <cmath>
+
+// ---- HTML helpers ----
+namespace html {
+
+inline std::string esc(const std::string& s)
+{
+    std::string o;
+    for (char c : s)
+    {
+        if (c == '<') o += "&lt;";
+        else if (c == '>') o += "&gt;";
+        else if (c == '&') o += "&amp;";
+        else if (c == '"') o += "&quot;";
+        else o += c;
+    }
+    return o;
+}
+
+inline std::string css()
+{
+    return
+        "<style>"
+        "*{box-sizing:border-box;}"
+        "body{font-family:'Segoe UI',monospace;background:#0d1117;color:#c9d1d9;margin:0;padding:0;}"
+        "nav{background:#161b22;padding:10px 20px;border-bottom:1px solid #30363d;display:flex;gap:8px;flex-wrap:wrap;}"
+        "nav a{color:#58a6ff;text-decoration:none;font-size:0.85em;padding:4px 8px;border-radius:4px;}"
+        "nav a:hover{background:#21262d;}"
+        ".container{max-width:1200px;margin:0 auto;padding:20px;}"
+        "h1{color:#58a6ff;margin:0 0 12px 0;}"
+        "h2{color:#8b949e;border-bottom:1px solid #21262d;padding-bottom:5px;}"
+        "table{border-collapse:collapse;width:100%;margin:8px 0 18px 0;}"
+        "th,td{border:1px solid #21262d;padding:5px 8px;text-align:right;font-size:0.85em;}"
+        "th{background:#161b22;color:#f0883e;text-align:left;}"
+        "td{background:#0d1117;}tr:hover td{background:#161b22;}"
+        ".buy{color:#3fb950;font-weight:bold;}"
+        ".sell{color:#f85149;font-weight:bold;}"
+        ".on{color:#3fb950;}.off{color:#484f58;}"
+        "form.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin:8px 0;}"
+        "form.card h3{margin:0 0 8px 0;color:#f0883e;font-size:0.95em;}"
+        "label{display:inline-block;min-width:110px;color:#8b949e;font-size:0.82em;}"
+        "input,select{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:4px 6px;"
+        "border-radius:4px;margin:2px 4px 2px 0;font-family:inherit;font-size:0.85em;}"
+        "input:focus,select:focus{border-color:#58a6ff;outline:none;}"
+        "button,.btn{background:#238636;color:#fff;border:none;padding:5px 12px;border-radius:4px;"
+        "cursor:pointer;font-size:0.82em;font-family:inherit;text-decoration:none;display:inline-block;}"
+        "button:hover,.btn:hover{background:#2ea043;}"
+        ".btn-danger{background:#da3633;}.btn-danger:hover{background:#f85149;}"
+        ".btn-sm{padding:2px 7px;font-size:0.78em;}"
+        ".btn-warn{background:#d29922;}.btn-warn:hover{background:#e3b341;}"
+        ".row{display:flex;gap:12px;flex-wrap:wrap;}"
+        ".stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 16px;min-width:140px;}"
+        ".stat .lbl{color:#8b949e;font-size:0.78em;}"
+        ".stat .val{font-size:1.3em;color:#f0883e;}"
+        ".msg{background:#1f6feb22;border:1px solid #1f6feb;padding:6px 10px;border-radius:4px;margin:8px 0;color:#58a6ff;font-size:0.9em;}"
+        ".err{background:#f8514922;border:1px solid #f85149;color:#f85149;}"
+        ".iform{display:inline;}"
+        "input[type=number]{width:90px;}"
+        "input[type=text]{width:120px;}"
+        ".forms-row{display:flex;gap:10px;flex-wrap:wrap;}"
+        ".forms-row form.card{flex:1;min-width:280px;}"
+        "p.empty{color:#484f58;font-style:italic;}"
+        ".workflow{display:flex;margin:0 0 16px 0;}"
+        ".wf-step{flex:1;text-align:center;padding:8px 0;font-size:0.82em;border-bottom:3px solid #21262d;color:#484f58;}"
+        ".wf-step a{color:inherit;text-decoration:none;}"
+        ".wf-step.active{border-color:#1f6feb;color:#58a6ff;font-weight:bold;}"
+        ".wf-step.done{border-color:#238636;color:#3fb950;}"
+        ".wf-step.done a::before{content:'\2713  ';}"
+        ".wf-step.locked{border-color:#21262d;color:#30363d;pointer-events:none;opacity:0.4;}"
+        ".wf-step.locked a{color:#30363d;cursor:default;}"
+        ".calc-console{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 16px;"
+        "margin:12px 0;font-family:'Consolas',monospace;font-size:0.78em;color:#8b949e;overflow-x:auto;"
+        "white-space:pre-wrap;line-height:1.6;}"
+        ".calc-console .hd{color:#f0883e;font-weight:bold;display:block;margin:6px 0 2px 0;"
+        "border-bottom:1px solid #21262d;padding-bottom:2px;}"
+        ".calc-console .fm{color:#d2a8ff;}"
+        ".calc-console .vl{color:#f0883e;}"
+        ".calc-console .rs{color:#3fb950;font-weight:bold;}"
+        "</style>";
+}
+
+inline std::string nav()
+{
+    return
+        "<nav>"
+        "<a href='/'>Dashboard</a>"
+        "<a href='/trades'>Trades</a>"
+        "<a href='/wallet'>Wallet</a>"
+        "<a href='/portfolio'>Portfolio</a>"
+        "<a href='/dca'>DCA</a>"
+        "<a href='/profit'>Profit</a>"
+        "<a href='/generate-horizons'>Horizons Gen</a>"
+        "<a href='/price-check'>Price Check</a>"
+        "<a href='/market-entry'>Entry Calc</a>"
+        "<a href='/serial-generator'>Serial Gen</a>"
+        "<a href='/exit-strategy'>Exit Calc</a>"
+        "<a href='/pending-exits'>Pending Exits</a>"
+        "<a href='/entry-points'>Entry Points</a>"
+        "<a href='/profit-history'>Profit History</a>"
+        "<a href='/params-history'>Params</a>"
+        "<a href='/param-models'>Models</a>"
+        "<a href='/chart' style='color:#d2a8ff;'>&#9733; Chart</a>"
+        "<a href='/wipe' style='color:#f85149;'>Wipe</a>"
+        "</nav>";
+}
+
+inline std::string workflow(int step, bool canHorizons = true, bool canExits = true)
+{
+    static const char* labels[] = {"1. Market Entry", "2. Generate Horizons", "3. Exit Strategy"};
+    static const char* hrefs[]  = {"/market-entry", "/generate-horizons", "/exit-strategy"};
+    bool available[] = {true, canHorizons, canExits};
+    std::string h = "<div class='workflow'>";
+    for (int i = 0; i < 3; ++i)
+    {
+        const char* cls;
+        if (!available[i])      cls = "wf-step locked";
+        else if (i == step)     cls = "wf-step active";
+        else if (i < step)      cls = "wf-step done";
+        else                    cls = "wf-step";
+        h += std::string("<div class='") + cls + "'><a href='" + hrefs[i] + "'>" + labels[i] + "</a></div>";
+    }
+    return h + "</div>";
+}
+
+inline std::string traceOverhead(double price, double quantity,
+                                 const HorizonParams& p)
+{
+    std::ostringstream c;
+    c << std::fixed << std::setprecision(8);
+    double fc  = p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
+    double num = fc * static_cast<double>(p.symbolCount);
+    double ppq = (quantity > 0.0) ? price / quantity : 0.0;
+    double den = ppq * p.portfolioPump + p.coefficientK;
+    double oh  = (den != 0.0) ? num / den : 0.0;
+    double surpComp = p.surplusRate * p.feeHedgingCoefficient * p.deltaTime;
+    double feeComp  = p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
+    double eo  = oh + surpComp + feeComp;
+    c << "<span class='hd'>Overhead</span>"
+      << "feeComponent = <span class='fm'>" << p.feeSpread << " &times; " << p.feeHedgingCoefficient << " &times; " << p.deltaTime << "</span>"
+      << " = <span class='vl'>" << fc << "</span>\n"
+      << "numerator    = <span class='fm'>" << fc << " &times; " << p.symbolCount << "</span>"
+      << " = <span class='vl'>" << num << "</span>\n"
+      << "pricePerQty  = <span class='fm'>" << price << " / " << quantity << "</span>"
+      << " = <span class='vl'>" << ppq << "</span>\n"
+      << "denominator  = <span class='fm'>" << ppq << " &times; " << p.portfolioPump << " + " << p.coefficientK << "</span>"
+      << " = <span class='vl'>" << den << "</span>\n"
+      << "<span class='rs'>overhead</span>     = " << num << " / " << den
+      << " = <span class='rs'>" << oh << " (" << (oh * 100.0) << "%)</span>\n"
+      << "surplusComp  = <span class='fm'>" << p.surplusRate << " &times; " << p.feeHedgingCoefficient << " &times; " << p.deltaTime << "</span>"
+      << " = <span class='vl'>" << surpComp << "</span>\n"
+      << "feeTimeComp  = <span class='fm'>" << p.feeSpread << " &times; " << p.feeHedgingCoefficient << " &times; " << p.deltaTime << "</span>"
+      << " = <span class='vl'>" << feeComp << "</span>\n"
+      << "<span class='rs'>effective</span>    = " << oh << " + " << surpComp << " + " << feeComp
+      << " = <span class='rs'>" << eo << " (" << (eo * 100.0) << "%)</span>\n";
+    if (p.maxRisk > 0.0)
+        c << "maxRisk      = <span class='vl'>" << p.maxRisk << " (" << (p.maxRisk * 100.0) << "%)</span> (TP ceiling per entry)\n";
+    if (p.minRisk > 0.0)
+        c << "minRisk      = <span class='vl'>" << p.minRisk << " (" << (p.minRisk * 100.0) << "%)</span> (TP floor above BE)\n";
+    return c.str();
+}
+
+inline std::string traceProfit(const Trade& t, double curPrice,
+                               double buyFees, double sellFees,
+                               const ProfitResult& r)
+{
+    std::ostringstream c;
+    c << std::fixed << std::setprecision(8);
+    bool isBuy = (t.type == TradeType::Buy);
+    c << "<span class='hd'>Profit</span>"
+      << "trade #" << t.tradeId << " " << t.symbol << " " << (isBuy ? "BUY" : "SELL")
+      << "  entry=<span class='vl'>" << t.value << "</span>"
+      << "  qty=<span class='vl'>" << t.quantity << "</span>"
+      << "  current=<span class='vl'>" << curPrice << "</span>\n\n";
+    if (isBuy)
+        c << "<span class='fm'>grossProfit</span>  = (current - entry) &times; qty\n"
+          << "               = (" << curPrice << " - " << t.value << ") &times; " << t.quantity
+          << " = <span class='vl'>" << r.grossProfit << "</span>\n";
+    else
+        c << "<span class='fm'>grossProfit</span>  = (entry - current) &times; qty\n"
+          << "               = (" << t.value << " - " << curPrice << ") &times; " << t.quantity
+          << " = <span class='vl'>" << r.grossProfit << "</span>\n";
+    double cost = t.value * t.quantity + buyFees;
+    c << "<span class='fm'>netProfit</span>    = gross - buyFees - sellFees\n"
+      << "               = " << r.grossProfit << " - " << buyFees << " - " << sellFees
+      << " = <span class='rs'>" << r.netProfit << "</span>\n"
+      << "<span class='fm'>cost</span>         = entry &times; qty + buyFees\n"
+      << "               = " << t.value << " &times; " << t.quantity << " + " << buyFees
+      << " = <span class='vl'>" << cost << "</span>\n"
+      << "<span class='fm'>ROI</span>          = (net / cost) &times; 100\n"
+      << "               = (" << r.netProfit << " / " << cost << ") &times; 100"
+      << " = <span class='rs'>" << r.roi << "%</span>\n";
+    return c.str();
+}
+
+inline std::string wrap(const std::string& title, const std::string& body)
+{
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+           "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+           "<title>" + esc(title) + " - Quant</title>" + css() +
+           "</head><body>" + nav() +
+           "<div class='container'>" + body + "</div></body></html>";
+}
+
+inline std::string msgBanner(const httplib::Request& req)
+{
+    if (!req.has_param("msg")) return "";
+    return "<div class='msg'>" + esc(req.get_param_value("msg")) + "</div>";
+}
+
+inline std::string errBanner(const httplib::Request& req)
+{
+    if (!req.has_param("err")) return "";
+    return "<div class='msg err'>" + esc(req.get_param_value("err")) + "</div>";
+}
+
+} // namespace html
+
+// ---- Form body parser ----
+inline std::string urlDec(const std::string& s)
+{
+    std::string o;
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        if (s[i] == '+') o += ' ';
+        else if (s[i] == '%' && i + 2 < s.size())
+        {
+            auto hv = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return 0;
+            };
+            o += (char)(hv(s[i + 1]) * 16 + hv(s[i + 2]));
+            i += 2;
+        }
+        else o += s[i];
+    }
+    return o;
+}
+
+inline std::map<std::string, std::string> parseForm(const std::string& body)
+{
+    std::map<std::string, std::string> m;
+    std::istringstream ss(body);
+    std::string pair;
+    while (std::getline(ss, pair, '&'))
+    {
+        auto eq = pair.find('=');
+        if (eq != std::string::npos)
+            m[urlDec(pair.substr(0, eq))] = urlDec(pair.substr(eq + 1));
+    }
+    return m;
+}
+
+inline std::string fv(const std::map<std::string, std::string>& f, const std::string& k, const std::string& d = "")
+{
+    auto it = f.find(k);
+    return it != f.end() ? it->second : d;
+}
+
+inline double fd(const std::map<std::string, std::string>& f, const std::string& k, double d = 0.0)
+{
+    auto s = fv(f, k);
+    if (s.empty()) return d;
+    try { return std::stod(s); } catch (...) { return d; }
+}
+
+inline int fi(const std::map<std::string, std::string>& f, const std::string& k, int d = 0)
+{
+    auto s = fv(f, k);
+    if (s.empty()) return d;
+    try { return std::stoi(s); } catch (...) { return d; }
+}

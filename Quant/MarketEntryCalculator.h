@@ -2,22 +2,30 @@
 
 #include "MultiHorizonEngine.h"
 #include <vector>
+#include <cmath>
+#include <limits>
 
-// Inverts the TP/SL horizon formula to find entry price levels.
+// Sigmoid-distributed entry price levels.
 //
-// Uses overhead only (no surplusRate) — surplus is a profit margin
-// applied at exit/horizon time, not entry spacing.
+// When rangeAbove / rangeBelow are both 0 (default):
+//   Level 0       = near 0  (deepest discount)
+//   Level N-1     = currentPrice (shallowest, at market)
 //
-//   overhead = computeOverhead(price, qty, params)
+// When rangeAbove or rangeBelow > 0:
+//   Level 0       = currentPrice - rangeBelow
+//   Level N-1     = currentPrice + rangeAbove
+//   Levels are sigmoid-interpolated between these bounds.
+//   Higher price levels receive less funding (controlled by risk).
 //
-//   EntryPrice[i] = currentPrice * (1 - overhead * (i + 1))
-//   BreakEven[i]  = entryPrice[i] * (1 + overhead)
+//   overhead  = computeOverhead(price, qty, params)
+//   BreakEven = entryPrice * (1 + overhead)
 //
 // Funding allocation (portfolioPump = total funds):
-//   riskCoefficient in [0, 1]
-//     0 = low risk  -> most funds at level 0 (closest to price)
-//     1 = high risk -> most funds at deepest level (furthest from price)
-//   weight[i] = (N - i) * (1 - risk) + (i + 1) * risk
+//   riskCoefficient in [0, 1] warps a sigmoid funding curve:
+//     0 = conservative -> sigmoid weights (more funds at higher prices)
+//     0.5 = uniform distribution
+//     1 = aggressive   -> inverse sigmoid (more funds at lower prices)
+//   weight[i] = (1 - risk) * norm[i] + risk * (1 - norm[i])
 //   allocation[i] = weight[i] / sum(weights) * totalFunds
 
 struct EntryLevel
@@ -38,23 +46,62 @@ public:
     static std::vector<EntryLevel> generate(double currentPrice,
                                             double quantity,
                                             const HorizonParams& p,
-                                            double riskCoefficient = 0.0)
+                                            double riskCoefficient = 0.0,
+                                            double steepness = 6.0,
+                                            double rangeAbove = 0.0,
+                                            double rangeBelow = 0.0)
     {
         double oh = MultiHorizonEngine::computeOverhead(currentPrice, quantity, p);
 
         int N = p.horizonCount;
+        if (N < 1) N = 1;
+        if (steepness < 0.1) steepness = 0.1;
+
         double risk = (riskCoefficient < 0.0) ? 0.0
                     : (riskCoefficient > 1.0) ? 1.0
                     : riskCoefficient;
 
-        // compute weights
+        // sigmoid helpers
+        auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
+        double sig0 = sigmoid(-steepness * 0.5);
+        double sig1 = sigmoid( steepness * 0.5);
+        double sigRange = (sig1 - sig0 > 0.0) ? sig1 - sig0 : 1.0;
+
+        // entry price range
+        double priceLow, priceHigh;
+        if (rangeAbove > 0.0 || rangeBelow > 0.0)
+        {
+            priceLow  = currentPrice - rangeBelow;
+            if (priceLow < std::numeric_limits<double>::epsilon())
+                priceLow = std::numeric_limits<double>::epsilon();
+            priceHigh = currentPrice + rangeAbove;
+        }
+        else
+        {
+            priceLow  = 0.0;
+            priceHigh = currentPrice;
+        }
+
+        // first pass: compute sigmoid-normalized values for each level
+        std::vector<double> norm(N);
+        for (int i = 0; i < N; ++i)
+        {
+            double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1)
+                               : 1.0;
+            double sigVal = sigmoid(steepness * (t - 0.5));
+            norm[i] = (sigVal - sig0) / sigRange;
+        }
+
+        // inverse-sigmoid funding warped by risk:
+        //   risk=0   -> sigmoid weights (more funding near current price)
+        //   risk=0.5 -> uniform
+        //   risk=1   -> inverse sigmoid (more funding at deep discounts)
         std::vector<double> weights(N);
         double weightSum = 0.0;
         for (int i = 0; i < N; ++i)
         {
-            double lowRiskW  = static_cast<double>(N - i);
-            double highRiskW = static_cast<double>(i + 1);
-            weights[i] = lowRiskW * (1.0 - risk) + highRiskW * risk;
+            weights[i] = (1.0 - risk) * norm[i] + risk * (1.0 - norm[i]);
+            if (weights[i] < 1e-12) weights[i] = 1e-12;
             weightSum += weights[i];
         }
 
@@ -63,12 +110,14 @@ public:
 
         for (int i = 0; i < N; ++i)
         {
-            double factor = oh * static_cast<double>(i + 1);
-
             EntryLevel el;
             el.index        = i;
             el.costCoverage = static_cast<double>(i + 1);
-            el.entryPrice   = currentPrice * (1.0 - factor);
+            el.entryPrice   = priceLow + norm[i] * (priceHigh - priceLow);
+
+            if (el.entryPrice < std::numeric_limits<double>::epsilon())
+                el.entryPrice = std::numeric_limits<double>::epsilon();
+
             el.breakEven    = el.entryPrice * (1.0 + oh);
 
             el.fundingFraction = (weightSum != 0.0) ? weights[i] / weightSum : 0.0;
