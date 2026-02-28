@@ -139,6 +139,7 @@
     <ClInclude Include="MultiHorizonEngine.h" />
     <ClInclude Include="PriceSeries.h" />
     <ClInclude Include="ProfitCalculator.h" />
+    <ClInclude Include="QuantMath.h" />
     <ClInclude Include="Routes_Api.h" />
     <ClInclude Include="AdminConfig.h" />
     <ClInclude Include="Routes_Admin.h" />

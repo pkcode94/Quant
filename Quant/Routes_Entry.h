@@ -3,6 +3,7 @@
 #include "AppContext.h"
 #include "HtmlHelpers.h"
 #include "MarketEntryCalculator.h"
+#include "QuantMath.h"
 #include <mutex>
 #include <algorithm>
 #include <cmath>
@@ -120,16 +121,12 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
             {
                 int cN = p.horizonCount;
                 double cSteep = (steepness < 0.1) ? 0.1 : steepness;
-                auto csig = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
-                double cs0 = csig(-cSteep * 0.5);
-                double cs1 = csig( cSteep * 0.5);
-                double csR = (cs1 - cs0 > 0) ? cs1 - cs0 : 1.0;
+                auto norm = QuantMath::sigmoidNormN(cN, cSteep);
                 con << "<span class='hd'>Entry Levels (overhead=" << lvlOh << ")</span>";
                 for (const auto& el : levels)
                 {
                     double ct = (cN > 1) ? static_cast<double>(el.index) / static_cast<double>(cN - 1) : 1.0;
-                    double cv = csig(cSteep * (ct - 0.5));
-                    double cn = (cv - cs0) / csR;
+                    double cn = norm[el.index];
                     con << "\n<span class='vl'>Level " << el.index << "</span>\n"
                         << "  t          = " << el.index << " / " << (cN - 1) << " = " << ct << "\n"
                         << "  sigmoid    = <span class='vl'>" << cn << "</span>\n"
@@ -152,7 +149,7 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
              "<th>Qty</th><th>Cost</th><th>Coverage</th><th>Exit TP</th><th>Exit SL</th></tr>";
         for (const auto& el : levels)
         {
-            double disc = cur > 0 ? ((cur - el.entryPrice) / cur * 100) : 0;
+            double disc = QuantMath::discount(cur, el.entryPrice);
             double exitTP = MultiHorizonEngine::levelTP(el.entryPrice, overhead, eo, p, steepness, el.index, p.horizonCount, isShort, risk, tpRef);
             double exitSL = MultiHorizonEngine::levelSL(el.entryPrice, eo, isShort);
             double cost = el.entryPrice * el.fundingQty;

@@ -57,23 +57,17 @@ public:
         if (N < 1) N = 1;
         if (steepness < 0.1) steepness = 0.1;
 
-        double risk = (riskCoefficient < 0.0) ? 0.0
-                    : (riskCoefficient > 1.0) ? 1.0
-                    : riskCoefficient;
+        double risk = QuantMath::clamp01(riskCoefficient);
 
         // sigmoid helpers
-        auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
-        double sig0 = sigmoid(-steepness * 0.5);
-        double sig1 = sigmoid( steepness * 0.5);
-        double sigRange = (sig1 - sig0 > 0.0) ? sig1 - sig0 : 1.0;
+        auto norm = QuantMath::sigmoidNormN(N, steepness);
 
         // entry price range
         double priceLow, priceHigh;
         if (rangeAbove > 0.0 || rangeBelow > 0.0)
         {
             priceLow  = currentPrice - rangeBelow;
-            if (priceLow < std::numeric_limits<double>::epsilon())
-                priceLow = std::numeric_limits<double>::epsilon();
+            priceLow  = QuantMath::floorEps(priceLow);
             priceHigh = currentPrice + rangeAbove;
         }
         else
@@ -82,28 +76,13 @@ public:
             priceHigh = currentPrice;
         }
 
-        // first pass: compute sigmoid-normalized values for each level
-        std::vector<double> norm(N);
-        for (int i = 0; i < N; ++i)
-        {
-            double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1)
-                               : 1.0;
-            double sigVal = sigmoid(steepness * (t - 0.5));
-            norm[i] = (sigVal - sig0) / sigRange;
-        }
-
         // inverse-sigmoid funding warped by risk:
         //   risk=0   -> sigmoid weights (more funding near current price)
         //   risk=0.5 -> uniform
         //   risk=1   -> inverse sigmoid (more funding at deep discounts)
-        std::vector<double> weights(N);
+        auto weights = QuantMath::riskWeights(norm, risk);
         double weightSum = 0.0;
-        for (int i = 0; i < N; ++i)
-        {
-            weights[i] = (1.0 - risk) * norm[i] + risk * (1.0 - norm[i]);
-            if (weights[i] < 1e-12) weights[i] = 1e-12;
-            weightSum += weights[i];
-        }
+        for (double w : weights) weightSum += w;
 
         std::vector<EntryLevel> levels;
         levels.reserve(N);
@@ -113,16 +92,14 @@ public:
             EntryLevel el;
             el.index        = i;
             el.costCoverage = static_cast<double>(i + 1);
-            el.entryPrice   = priceLow + norm[i] * (priceHigh - priceLow);
+            el.entryPrice   = QuantMath::lerp(priceLow, priceHigh, norm[i]);
+            el.entryPrice   = QuantMath::floorEps(el.entryPrice);
 
-            if (el.entryPrice < std::numeric_limits<double>::epsilon())
-                el.entryPrice = std::numeric_limits<double>::epsilon();
-
-            el.breakEven    = el.entryPrice * (1.0 + oh);
+            el.breakEven    = QuantMath::breakEven(el.entryPrice, oh);
 
             el.fundingFraction = (weightSum != 0.0) ? weights[i] / weightSum : 0.0;
             el.funding         = p.portfolioPump * el.fundingFraction;
-            el.fundingQty      = (el.entryPrice > 0.0) ? el.funding / el.entryPrice : 0.0;
+            el.fundingQty      = QuantMath::fundedQty(el.entryPrice, el.funding);
 
             el.potentialNet = (currentPrice - el.entryPrice) * el.fundingQty;
 

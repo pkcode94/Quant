@@ -414,7 +414,7 @@ public:
         for (const auto& t : result.trades) result.totalBuyFees  += t.buyFee;
         for (const auto& s : result.sells)  result.totalSellFees += s.sellFee;
         result.feeHedgingAmount   = hedgePool;
-        result.feeHedgingCoverage = (totalFees > 0) ? hedgePool / totalFees : 0;
+        result.feeHedgingCoverage = QuantMath::feeHedgingCoverage(hedgePool, totalFees);
         result.totalSavings       = savings;
         if (cfg.chainCycles && cycle > 0)
             result.cyclesCompleted = cycle;

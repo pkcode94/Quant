@@ -25,7 +25,7 @@
 > - With **SL hedge buffer** ($n_{\text{sl}} > 0$): pre-funds future SL losses via TP inflation. This restores the deterministic guarantee *on average* — if you expect $n_{\text{sl}}$ SL hits per profitable cycle, the extra TP profit covers them.
 > - In **highly leveraged or volatile markets** where a 100% drawdown is possible and any exit is better than liquidation.
 >
-> **The default configuration ($\phi_{\text{sl}} = 1$, SL off, $n_{\text{sl}} = 0$) is the only configuration where every equation in this paper holds unconditionally.** Any other configuration introduces probabilistic assumptions about SL hit rates that the deterministic framework cannot verify. See [`docs/failure-modes.md`](docs/failure-modes.md) for a complete analysis of when the mathematics breaks down.
+> **The default configuration ($\phi_{\text{sl}} = 1$, SL off, $n_{\text{sl}} = 0$) is the only configuration where every equation in this paper holds unconditionally.** Any other configuration introduces probabilistic assumptions about SL hit rates that the deterministic framework cannot verify. See [`docs/failure-modes.md`](docs/failure-modes.md) for when the mathematics breaks down and [`docs/best-case-use.md`](docs/best-case-use.md) for the intended operating envelope.
 
 ---
 
@@ -99,14 +99,16 @@ where $f_s$ is the fee spread (exchange fee rate plus slippage), $f_h$ is the fe
 ### 3.2 Raw Overhead
 
 $$
-\text{OH}(P, q) = \frac{\mathcal{F} \cdot n_s}{\dfrac{P}{q} \cdot T + K}
+\text{OH}(P, q) = \frac{\mathcal{F} \cdot n_s \cdot (1 + n_f)}{\dfrac{P}{q} \cdot T + K}
 $$
 
-where $P$ is the price per unit, $q$ is the quantity, $n_s$ is the number of symbols in the portfolio, $T$ is the portfolio pump (injected capital), and $K$ is an additive offset.
+where $P$ is the price per unit, $q$ is the quantity, $n_s$ is the number of symbols in the portfolio, $T$ is the portfolio pump (injected capital), $K$ is an additive offset, and $n_f$ is the **future trade count** — the number of future chain trades whose fees this position's TP must pre-cover ($n_f = 0$ means self only).
 
-**Derivation.** The numerator represents the total fee cost across all symbols. The denominator is the *effective capital density* — the per-unit price scaled by pump capital, with $K$ as a stabiliser to prevent division by zero when $T = 0$. As $T$ grows, the denominator grows, and overhead shrinks: more capital means fees are a smaller fraction of the position.
+**Derivation.** The numerator represents the total fee cost across all symbols, scaled by $(1 + n_f)$ so that a single profitable exit hedges the fees of $n_f$ subsequent trades in the chain. The denominator is the *effective capital density* — the per-unit price scaled by pump capital, with $K$ as a stabiliser to prevent division by zero when $T = 0$. As $T$ grows, the denominator grows, and overhead shrinks: more capital means fees are a smaller fraction of the position.
 
-**Interpretation.** OH is the fraction of position value consumed by fees. A position at OH = 0.03 needs a 3% price increase just to break even (before surplus).
+**Interpretation.** OH is the fraction of position value consumed by fees. A position at OH = 0.03 needs a 3% price increase just to break even (before surplus). When $n_f > 0$, the overhead inflates proportionally — a trade with $n_f = 2$ needs roughly $3\times$ the overhead of $n_f = 0$ to pre-fund two future trades' fees.
+
+**Chain auto-derivation.** In chain mode (§9), $n_f$ is not a manual parameter — it is derived from the chain structure. Cycle $c$ in a $C$-cycle chain sets $n_f = C - 1 - c$: cycle 0 pre-funds $C-1$ future trades, the last cycle pre-funds 0.
 
 ### 3.3 Effective Overhead
 
@@ -307,7 +309,22 @@ $$
 
 The stop-loss is placed at exactly the effective overhead distance *below* entry for LONG (above for SHORT). If the SL is hit, the loss equals the overhead — the maximum loss is bounded by the same formula that governs the TP.
 
-### 5.6 Capital-Loss Cap
+### 5.6 Fractional Stop-Loss Exit
+
+The stop-loss fraction $\phi_{\text{sl}} \in [0, 1]$ controls how much of the position is sold when the SL price is hit:
+
+$$
+q_{\text{sl}} = q_i \cdot \phi_{\text{sl}}
+$$
+
+| $\phi_{\text{sl}}$ | Behaviour | Use case |
+|---------------------|-----------|----------|
+| 1.0 | Full exit | Close the entire position at SL (default, maximum loss containment) |
+| 0.5 | Half exit | Reduce exposure by 50%, keep the rest open for recovery |
+| 0.25 | Quarter exit | Trim position, absorb a small loss, hold for reversal |
+| 0.0 | No exit | SL is tracked but does not execute (monitoring only) |
+
+### 5.7 Capital-Loss Cap
 
 The integrated worst-case SL loss across all $N$ levels must never exceed the available capital:
 
@@ -429,6 +446,20 @@ $$
 
 When $R_{\max} = 0$, the upper asymptote falls back to $\text{EO}$, which contains the $\Delta t$ factor through the fee component. This makes the buffer *time-sensitive* — longer holding periods inflate the buffer automatically. When $R_{\max} > 0$, it acts as a hard cap regardless of time.
 
+### 7.5 Stop-Loss Hedge Buffer
+
+Mirrors the downtrend buffer (§7.2) but pre-funds potential future stop-loss hits instead of downtrend re-entries. When $n_{\text{sl}} > 0$, TPs are inflated so that the extra profit covers $n_{\text{sl}}$ future SL events at the configured fractional loss.
+
+$$
+\text{buffer}_{\text{sl}} = 1 + n_{\text{sl}} \cdot \phi_{\text{sl}} \cdot \text{pc}
+$$
+
+The combined TP multiplier applies both buffers multiplicatively:
+
+$$
+\text{TP}_{\text{adj}} = \text{TP}_{\text{base}} \cdot \text{buffer}_{\text{dt}} \cdot \text{buffer}_{\text{sl}}
+$$
+
 ---
 
 ## 8. Serial Generator
@@ -496,11 +527,21 @@ $$
 
 This means TP targets compress toward entry prices with each cycle — the system becomes more capital-efficient over time. The surplus rate $s$ becomes the dominant cost, and the chain's per-cycle profit margin stabilises at approximately $s$.
 
-### 9.4 Superposition Metaphor
+### 9.4 Future Fee Pre-Funding
+
+Each cycle's overhead is automatically scaled by the number of remaining cycles:
+
+$$
+n_f^{(c)} = C - 1 - c
+$$
+
+Cycle 0 in a 5-cycle chain has $n_f = 4$ (its TP must pre-cover fees for 4 future trades). The last cycle has $n_f = 0$ (self-only). The two effects — growing capital and shrinking $n_f$ — compound, making the convergence toward the surplus-only limit faster than either effect alone.
+
+### 9.5 Superposition Metaphor
 
 Before the market observes (reaches) an entry level, all levels exist as potential states. The price action "collapses" each level into an open position when it reaches the entry price, then "collapses" the exit when the TP is reached. The chain is a sequence of these collapses — a supercoordinate system where each cycle's levels are defined relative to the previous cycle's outcome.
 
-### 9.5 Savings as Irreversible Extraction
+### 9.6 Savings as Irreversible Extraction
 
 The savings diversion $s_{\text{save}}$ is an irreversible extraction from the system. Capital inside the chain compounds; savings exit the chain permanently. This creates a two-compartment model:
 
@@ -594,23 +635,23 @@ When enabled, the simulator detects cycle completion (all positions closed), div
 Parameters:
   P = 100,000    T = 10,000    f_s = 0.001
   s = 0.02       N = 4         r = 0.5
-  f_h = 1        ?t = 1        K = 0
+  f_h = 1        Δt = 1        K = 0
 
 Overhead:
   F = 0.001 × 1 × 1 = 0.001
-  OH = (0.001 × 1) / ((100,000/1) × 10,000 + 0) = 1e-12 ? 0
+  OH = (0.001 × 1) / ((100,000/1) × 10,000 + 0) = 1e-12 ≈ 0
   EO = 0 + (0.02 + 0.001) × 1 × 1 = 0.021
 
 Entry levels (default range, priceLow=0, priceHigh=100,000):
-  L0: entry ?  $2,474    discount 97.5%
-  L1: entry ? $26,894    discount 73.1%
-  L2: entry ? $73,106    discount 26.9%
-  L3: entry ? $97,526    discount  2.5%
+  L0: entry ≈  $2,474    discount 97.5%
+  L1: entry ≈ $26,894    discount 73.1%
+  L2: entry ≈ $73,106    discount 26.9%
+  L3: entry ≈ $97,526    discount  2.5%
 
 Funding (r=0.5, uniform):
-  Each level gets ? 25% of $10,000 = $2,500
+  Each level gets ≈ 25% of $10,000 = $2,500
 
-TP at each level ? entry × (1 + 0.021) ? entry × 1.021
+TP at each level ≈ entry × (1 + 0.021) ≈ entry × 1.021
 ```
 
 **Market plays out:** BTC drops to $73,000 — levels L0, L1, L2 trigger. BTC recovers to $75,000 — L2's TP ($74,641) is hit. The 2.1% overhead covers the exchange fee and delivers 2% surplus. L0 and L1 are still open with much larger upside potential.
@@ -623,7 +664,7 @@ TP at each level ? entry × (1 + 0.021) ? entry × 1.021
 
 ```
 OH = (0.001 × 1) / ((100,000/1) × 50 + 0)
-   = 0.001 / 5,000,000 ? 2e-10 ? 0
+   = 0.001 / 5,000,000 ≈ 2e-10 ≈ 0
 
 EO = 0 + 0.021 = 0.021
 ```
@@ -656,21 +697,21 @@ In a sideways market, this creates a buy-at-support / sell-at-resistance grid. T
 ```
 Cycle 0:
   Capital: $1,000
-  Deploy 4 levels, TP ? entry × 1.021
-  All TPs hit ? profit ? $21
+  Deploy 4 levels, TP ≈ entry × 1.021
+  All TPs hit → profit ≈ $21
   Savings: $21 × 0.05 = $1.05
   Capital for cycle 1: $1,000 + $21 - $1.05 = $1,019.95
 
 Cycle 1:
   Capital: $1,019.95
   OH slightly lower (more capital)
-  All TPs hit ? profit ? $21.42
+  All TPs hit → profit ≈ $21.42
   Savings: $1.07
   Capital for cycle 2: $1,040.30
 
 Cycle 2:
   Capital: $1,040.30
-  Profit ? $21.85
+  Profit ≈ $21.85
   Savings: $1.09
   Final capital: $1,061.06
 
@@ -686,13 +727,13 @@ Each cycle is slightly more efficient than the last because the overhead shrinks
 **Scenario:** Position at $50,000 with qty 0.1. Pump $5,000. EO = 3%. DT count = 2.
 
 ```
-? = (50,000 × 0.1) / 5,000 = 1.0
+δ = (50,000 × 0.1) / 5,000 = 1.0
 t = 1.0 / (1.0 + 1.0) = 0.5
-?_d = max(1.0, 0.1) = 1.0
+α_d = max(1.0, 0.1) = 1.0
 
 With R_min = 0, R_max = 0 (EO fallback):
   upper = EO = 0.03
-  per_cycle = 0 + ??_1.0(0.5) × 0.03
+  per_cycle = 0 + σ̂_1.0(0.5) × 0.03
             = 0.5 × 0.03 = 0.015
   buffer = 1 + 2 × 0.015 = 1.03
 
@@ -762,8 +803,11 @@ All formulas mirror. TP targets decrease below entry. SL targets increase above 
 | $F_i$ | §4.3 | Funding fraction per level |
 | $\text{TP}_i$ | §5 | Take-profit target |
 | $\text{SL}_i$ | §5.5 | Stop-loss target |
+| $q_{\text{sl}}$ | §5.6 | Fractional SL exit quantity |
+| $\phi_{\text{sl}}^{\text{clamped}}$ | §5.7 | Capital-loss cap on SL fraction |
 | $q_i^{\text{sell}}$ | §6.2 | Exit quantity per level |
 | buffer | §7.2 | Downtrend TP multiplier |
+| $\text{buffer}_{\text{sl}}$ | §7.5 | Stop-loss hedge TP multiplier |
 | Coverage | §11.4 | Fee hedging verification |
 | $\partial\hat\sigma/\partial t$, $\partial\hat\sigma/\partial\alpha$ | §15.1 | Sigmoid gradient primitives |
 | $\partial\text{OH}/\partial T$ | §15.2 | Capital-overhead sensitivity |
@@ -1034,6 +1078,24 @@ $$
 
 The full gradient chains through $\delta \to t \to \hat\sigma \to \text{pc} \to \text{buffer}$ and also through $\delta \to \alpha_d \to \hat\sigma$, creating a coupled nonlinear sensitivity.
 
+### 15.8b Stop-Loss Buffer Derivatives
+
+$\text{buffer}_{\text{sl}} = 1 + n_{\text{sl}} \cdot \phi_{\text{sl}} \cdot \text{pc}$
+
+**With respect to SL fraction:**
+
+$$
+\boxed{
+\frac{\partial\,\text{buffer}_{\text{sl}}}{\partial \phi_{\text{sl}}} = n_{\text{sl}} \cdot \text{pc}
+}
+$$
+
+**With respect to SL hedge count** (continuous relaxation):
+
+$$
+\frac{\partial\,\text{buffer}_{\text{sl}}}{\partial n_{\text{sl}}} = \phi_{\text{sl}} \cdot \text{pc}
+$$
+
 ### 15.9 Chain Compounding Derivatives
 
 Capital at cycle $c+1$: $T_{c+1} = T_c + \Pi_c - \text{Sav}_c$ where $\text{Sav}_c = \Pi_c \cdot s_{\text{save}}$, so $T_{c+1} = T_c + \Pi_c(1 - s_{\text{save}})$.
@@ -1081,16 +1143,18 @@ The first term is the direct effect (higher surplus = higher profit per cycle). 
 
 | Output | w.r.t. | Gradient | Sign | Interpretation |
 |--------|--------|----------|------|---------------|
-| OH | $T$ | $-\text{OH} \cdot (P/q) / D$ | $-$ | More capital ? less overhead |
-| OH | $f_s$ | $\text{OH}/f_s$ | $+$ | Higher fees ? more overhead |
+| OH | $T$ | $-\text{OH} \cdot (P/q) / D$ | $-$ | More capital → less overhead |
+| OH | $f_s$ | $\text{OH}/f_s$ | $+$ | Higher fees → more overhead |
 | EO | $s$ | $f_h \cdot \Delta t$ | $+$ | Constant — surplus is linear |
 | $P_e$ | $\alpha$ | $\partial\hat\sigma/\partial\alpha \cdot \Delta P$ | $\pm$ | Steepness shifts entries |
 | $F_i$ | $r$ | $(1-2n_i)/W - F_i \cdot \Sigma(1-2n_j)/W$ | $\pm$ | Risk reallocates capital |
 | TP | $s$ | $(1-n_i) \cdot P_e \cdot f_h \cdot \Delta t$ | $+$ | Surplus raises TP floor |
 | TP | $R_{\max}$ | $n_i \cdot P_{\text{ref}}$ | $+$ | Ceiling scales with reference |
 | TP | $r$ | $(\text{TP}_{\max}-\text{TP}_{\min})(1-2\hat\sigma)$ | $\pm$ | Warps TP distribution |
-| $\Pi_i$ | $s$ | $\text{Funding}_i \cdot (1-n_i) \cdot f_h \cdot \Delta t$ | $+$ | More surplus ? more profit |
+| $\Pi_i$ | $s$ | $\text{Funding}_i \cdot (1-n_i) \cdot f_h \cdot \Delta t$ | $+$ | More surplus → more profit |
 | Buffer | $R_{\min}$ | $n_d(1-\hat\sigma)$ | $+$ | Floor raises buffer |
+| OH | $n_f$ | $\text{OH}/(1+n_f)$ | $+$ | Each future trade adds marginal overhead |
+| $\text{buffer}_{\text{sl}}$ | $\phi_{\text{sl}}$ | $n_{\text{sl}} \cdot \text{pc}$ | $+$ | More SL fraction → more TP inflation |
 | $T_{c+1}$ | $s_{\text{save}}$ | $-\Pi_c$ | $-$ | Savings drain capital |
 
 ---
@@ -1124,7 +1188,7 @@ $N$ and $n_d$ are discrete and handled separately (grid search or enumeration).
 | $\alpha$ | 0.1 | 20 | Steepness range |
 | $f_h$ | 1 | 10 | Hedging multiplier |
 | $R_{\max}$ | 0 | 1 | Max TP fraction |
-| $R_{\min}$ | 0 | $R_{\max}$ | Floor ? ceiling |
+| $R_{\min}$ | 0 | $R_{\max}$ | Floor ≤ ceiling |
 | $s_{\text{save}}$ | 0 | 0.99 | Can't save 100% |
 | $R_{\text{above}}$, $R_{\text{below}}$ | 0 | $P$ | Range within price |
 | $\Delta t$ | 0.01 | 10 | Time scaling |

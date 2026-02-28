@@ -48,89 +48,38 @@ public:
                                            double exitFraction = 1.0,
                                            double steepness = 4.0)
     {
-        double eo = MultiHorizonEngine::effectiveOverhead(trade, p);
+        QuantMath::ExitParams ep;
+        ep.entryPrice      = trade.value;
+        ep.quantity         = trade.quantity;
+        ep.buyFee           = trade.buyFee;
+        ep.rawOH            = MultiHorizonEngine::computeOverhead(trade, p);
+        ep.eo               = MultiHorizonEngine::effectiveOverhead(trade, p);
+        ep.maxRisk          = p.maxRisk;
+        ep.horizonCount     = p.horizonCount;
+        ep.riskCoefficient  = riskCoefficient;
+        ep.exitFraction     = exitFraction;
+        ep.steepness        = steepness;
 
-        int N = p.horizonCount;
-        if (N < 1) N = 1;
-
-        double frac  = clamp01(exitFraction);
-        double risk  = clamp01(riskCoefficient);
-        double steep = (steepness > 0.0) ? steepness : 0.01;
-
-        double sellableQty = trade.quantity * frac;
-
-        // Sigmoid cumulative distribution
-        // center = where the steepest part is
-        // risk=0 -> center near start -> sell heavy early
-        // risk=1 -> center near end   -> sell heavy late
-        double center = risk * static_cast<double>(N - 1);
-
-        std::vector<double> cumSigma(N + 1);
-        for (int i = 0; i <= N; ++i)
-        {
-            double x = static_cast<double>(i) - 0.5;
-            cumSigma[i] = sigmoid(steep * (x - center));
-        }
-        double lo = cumSigma[0], hi = cumSigma[N];
-        for (int i = 0; i <= N; ++i)
-            cumSigma[i] = (hi > lo) ? (cumSigma[i] - lo) / (hi - lo)
-                                    : static_cast<double>(i) / static_cast<double>(N);
-
-        double totalBuyFees = trade.buyFee;
+        auto plan = QuantMath::generateExitPlan(ep);
 
         std::vector<ExitLevel> levels;
-        levels.reserve(N);
-
-        bool useMaxRisk = (p.maxRisk > 0.0);
-        double mrMinF = 0, mrMaxF = 0, mrS0 = 0, mrSR = 1;
-        if (useMaxRisk)
+        levels.reserve(plan.levels.size());
+        for (const auto& pl : plan.levels)
         {
-            mrMinF = MultiHorizonEngine::computeOverhead(trade.value, trade.quantity, p);
-            mrMaxF = p.maxRisk;
-            if (mrMaxF < mrMinF) mrMaxF = mrMinF;
-            mrS0 = sigmoid(-steep * 0.5);
-            double mrS1 = sigmoid(steep * 0.5);
-            mrSR = (mrS1 - mrS0 > 0) ? mrS1 - mrS0 : 1.0;
-        }
-
-        double cumSold = 0.0;
-        double cumNet  = 0.0;
-
-        for (int i = 0; i < N; ++i)
-        {
-            double factor;
-            if (useMaxRisk)
-            {
-                double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1)
-                                   : 1.0;
-                double norm = (sigmoid(steep * (t - 0.5)) - mrS0) / mrSR;
-                factor = mrMinF + norm * (mrMaxF - mrMinF);
-            }
-            else
-            {
-                factor = eo * static_cast<double>(i + 1);
-            }
-
             ExitLevel el;
-            el.index        = i;
-            el.tpPrice      = trade.value * (1.0 + factor);
-            el.sellFraction = cumSigma[i + 1] - cumSigma[i];
-            el.sellQty      = sellableQty * el.sellFraction;
-            el.sellValue    = el.tpPrice * el.sellQty;
-            el.grossProfit  = (el.tpPrice - trade.value) * el.sellQty;
-
-            el.levelBuyFee  = totalBuyFees * el.sellFraction;
+            el.index        = pl.index;
+            el.tpPrice      = pl.tpPrice;
+            el.sellQty      = pl.sellQty;
+            el.sellFraction = pl.sellFraction;
+            el.sellValue    = pl.sellValue;
+            el.grossProfit  = pl.grossProfit;
+            el.cumSold      = pl.cumSold;
+            el.levelBuyFee  = pl.levelBuyFee;
             el.levelSellFee = 0.0;
-            el.netProfit    = el.grossProfit - el.levelBuyFee;
-
-            cumSold += el.sellQty;
-            cumNet  += el.netProfit;
-            el.cumSold      = cumSold;
-            el.cumNetProfit  = cumNet;
-
+            el.netProfit    = pl.netProfit;
+            el.cumNetProfit = pl.cumNetProfit;
             levels.push_back(el);
         }
-
         return levels;
     }
 
@@ -144,16 +93,5 @@ public:
             cumNet += el.netProfit;
             el.cumNetProfit = cumNet;
         }
-    }
-
-private:
-    static double sigmoid(double x)
-    {
-        return 1.0 / (1.0 + std::exp(-x));
-    }
-
-    static double clamp01(double v)
-    {
-        return (v < 0.0) ? 0.0 : (v > 1.0) ? 1.0 : v;
     }
 };

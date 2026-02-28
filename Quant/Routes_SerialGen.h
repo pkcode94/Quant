@@ -2,6 +2,7 @@
 
 #include "AppContext.h"
 #include "HtmlHelpers.h"
+#include "QuantMath.h"
 #include <mutex>
 #include <cmath>
 #include <limits>
@@ -88,67 +89,42 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         if (sym.empty() || cur <= 0 || qty <= 0)
         { h << "<div class='msg err'>Symbol, price, and quantity are required</div><br><a class='btn' href='/serial-generator'>Back</a>";
           res.set_content(html::wrap("Serial Generator", h.str()), "text/html"); return; }
-        int N = p.horizonCount; if (N < 1) N = 1;
-        if (steepness < 0.1) steepness = 0.1;
-        auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
-        double sig0 = sigmoid(-steepness * 0.5);
-        double sig1 = sigmoid(steepness * 0.5);
-        double sigRange = (sig1 - sig0 > 0) ? sig1 - sig0 : 1.0;
-        double eo = MultiHorizonEngine::effectiveOverhead(cur, qty, p);
-        double overhead = MultiHorizonEngine::computeOverhead(cur, qty, p);
-        double riskClamped = (risk < 0) ? 0 : (risk > 1) ? 1 : risk;
-        double dtBuffer = MultiHorizonEngine::calculateDowntrendBuffer(cur, qty, availableFunds, eo, p.minRisk, p.maxRisk, downtrendCount);
-        double slFrac = MultiHorizonEngine::stopLossSellFraction(p);
-        double slBuffer = MultiHorizonEngine::calculateStopLossBuffer(cur, qty, availableFunds, eo, p.minRisk, p.maxRisk, slFrac, p.stopLossHedgeCount);
-        double combinedBuffer = dtBuffer * slBuffer;
-        struct SerialEntry { int idx; double entryPrice; double breakEven; double discount;
-            double funding; double fundFrac; double fundQty; double tpTotal; double tpu; double tpGross;
-            double slTotal; double slu; double slLoss; double slQty; };
-        std::vector<SerialEntry> entries;
-        double priceLow, priceHigh;
-        if (rangeAbove > 0.0 || rangeBelow > 0.0)
-        { priceLow = cur - rangeBelow; if (priceLow < std::numeric_limits<double>::epsilon()) priceLow = std::numeric_limits<double>::epsilon();
-          priceHigh = cur + rangeAbove; }
-        else { priceLow = 0.0; priceHigh = cur; }
-        std::vector<double> norm(N);
-        for (int i = 0; i < N; ++i)
-        { double t = (N > 1) ? static_cast<double>(i) / static_cast<double>(N - 1) : 1.0;
-          double sigVal = sigmoid(steepness * (t - 0.5)); norm[i] = (sigVal - sig0) / sigRange; }
-        std::vector<double> weights(N);
-        double weightSum = 0;
-        for (int i = 0; i < N; ++i)
-        { weights[i] = (1.0 - riskClamped) * norm[i] + riskClamped * (1.0 - norm[i]);
-          if (weights[i] < 1e-12) weights[i] = 1e-12; weightSum += weights[i]; }
-        // Pre-compute per-level funding for SL capital-loss cap.
-        std::vector<double> fundings(N);
-        for (int i = 0; i < N; ++i)
-            fundings[i] = (weightSum > 0) ? availableFunds * weights[i] / weightSum : 0;
-        // Clamp ?_sl so total worst-case SL loss ? available capital.
-        if (genSL)
-            slFrac = MultiHorizonEngine::clampStopLossFraction(slFrac, eo, fundings, availableFunds);
-        for (int i = 0; i < N; ++i)
-        {
-            double entryPrice = priceLow + norm[i] * (priceHigh - priceLow);
-            if (entryPrice < std::numeric_limits<double>::epsilon()) entryPrice = std::numeric_limits<double>::epsilon();
-            double tpPrice = MultiHorizonEngine::levelTP(entryPrice, overhead, eo, p, steepness, i, N, isShort, riskClamped, priceHigh);
-            if (combinedBuffer > 1.0) tpPrice *= combinedBuffer;
-            double slPrice = MultiHorizonEngine::levelSL(entryPrice, eo, isShort);
-            double fundFrac = (weightSum > 0) ? weights[i] / weightSum : 0;
-            double funding = availableFunds * fundFrac;
-            double fundQty = funding / entryPrice;
-            double slSellQty = fundQty * slFrac;
-            double breakEven = entryPrice * (1.0 + overhead);
-            double cost = entryPrice * fundQty;
-            double tpTotal = tpPrice * fundQty;
-            double tpGross = tpTotal - cost;
-            double slTotal = genSL ? slPrice * slSellQty : 0;
-            double slLoss = genSL ? slTotal - entryPrice * slSellQty : 0;
-            double disc = cur > 0 ? ((cur - entryPrice) / cur * 100) : 0;
-            entries.push_back({i, entryPrice, breakEven, disc, funding, fundFrac, fundQty, tpTotal, tpPrice, tpGross, slTotal, slPrice, slLoss, slSellQty});
-        }
+
+        // ?? Compute plan via QuantMath ??
+        QuantMath::SerialParams sp;
+        sp.currentPrice          = cur;
+        sp.quantity              = qty;
+        sp.levels                = p.horizonCount;
+        sp.steepness             = steepness;
+        sp.risk                  = risk;
+        sp.isShort               = isShort;
+        sp.availableFunds        = availableFunds;
+        sp.rangeAbove            = rangeAbove;
+        sp.rangeBelow            = rangeBelow;
+        sp.feeSpread             = p.feeSpread;
+        sp.feeHedgingCoefficient = p.feeHedgingCoefficient;
+        sp.deltaTime             = p.deltaTime;
+        sp.symbolCount           = p.symbolCount;
+        sp.coefficientK          = p.coefficientK;
+        sp.surplusRate           = p.surplusRate;
+        sp.futureTradeCount      = p.futureTradeCount;
+        sp.maxRisk               = p.maxRisk;
+        sp.minRisk               = p.minRisk;
+        sp.generateStopLosses    = genSL;
+        sp.stopLossFraction      = p.stopLossFraction;
+        sp.stopLossHedgeCount    = p.stopLossHedgeCount;
+        sp.downtrendCount        = downtrendCount;
+
+        auto plan = QuantMath::generateSerialPlan(sp);
+        const auto& entries = plan.entries;
+        double eo = plan.effectiveOH;
+        double overhead = plan.overhead;
+        double dtBuffer = plan.dtBuffer;
+        double slBuffer = plan.slBuffer;
+        double slFrac   = plan.slFraction;
+        double totalSlLoss = plan.totalSlLoss;
+
         h << "<h1>Serial Plan: " << html::esc(sym) << " @ " << cur << "</h1>";
-        double totalSlLoss = 0;
-        if (genSL) { for (const auto& e : entries) totalSlLoss += std::abs(e.slLoss); }
         h << "<div class='row'>"
              "<div class='stat'><div class='lbl'>Overhead</div><div class='val'>" << (overhead * 100) << "%</div></div>"
              "<div class='stat'><div class='lbl'>Effective</div><div class='val'>" << (eo * 100) << "%</div></div>"
@@ -171,11 +147,11 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         for (const auto& e : entries)
         {
             double cost = e.entryPrice * e.fundQty;
-            h << "<tr><td>" << e.idx << "</td><td>" << e.entryPrice << "</td><td>" << e.discount << "%</td>"
+            h << "<tr><td>" << e.index << "</td><td>" << e.entryPrice << "</td><td>" << e.discountPct << "%</td>"
               << "<td>" << e.fundQty << "</td><td>" << cost << "</td><td>" << e.breakEven << "</td>"
-              << "<td class='buy'>" << e.tpu << "</td><td class='buy'>" << e.tpTotal << "</td><td class='buy'>" << e.tpGross << "</td>";
+              << "<td class='buy'>" << e.tpUnit << "</td><td class='buy'>" << e.tpTotal << "</td><td class='buy'>" << e.tpGross << "</td>";
             if (genSL)
-                h << "<td class='sell'>" << e.slu << "</td><td class='sell'>" << e.slQty << "</td><td class='sell'>" << e.slTotal << "</td><td class='sell'>" << e.slLoss << "</td>";
+                h << "<td class='sell'>" << e.slUnit << "</td><td class='sell'>" << e.slQty << "</td><td class='sell'>" << e.slTotal << "</td><td class='sell'>" << e.slLoss << "</td>";
             h << "</tr>";
         }
         h << "</table>";
@@ -184,21 +160,122 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='hidden' name='symbol' value='" << html::esc(sym) << "'>"
              "<input type='hidden' name='isShort' value='" << (isShort ? "1" : "0") << "'>"
              "<input type='hidden' name='pump' value='" << p.portfolioPump << "'>"
-             "<input type='hidden' name='entryCount' value='" << N << "'>";
+             "<input type='hidden' name='entryCount' value='" << entries.size() << "'>";
         for (const auto& e : entries)
         {
             if (e.funding <= 0) continue;
-            h << "<input type='hidden' name='ep_" << e.idx << "' value='" << e.entryPrice << "'>"
-              << "<input type='hidden' name='eq_" << e.idx << "' value='" << e.fundQty << "'>"
-              << "<input type='hidden' name='eb_" << e.idx << "' value='" << e.breakEven << "'>"
-              << "<input type='hidden' name='ef_" << e.idx << "' value='" << e.funding << "'>"
-              << "<input type='hidden' name='eov_" << e.idx << "' value='" << eo << "'>"
-              << "<input type='hidden' name='etp_" << e.idx << "' value='" << e.tpu << "'>"
-              << "<input type='hidden' name='esl_" << e.idx << "' value='" << e.slu << "'>";
+            h << "<input type='hidden' name='ep_" << e.index << "' value='" << e.entryPrice << "'>"
+              << "<input type='hidden' name='eq_" << e.index << "' value='" << e.fundQty << "'>"
+              << "<input type='hidden' name='eb_" << e.index << "' value='" << e.breakEven << "'>"
+              << "<input type='hidden' name='ef_" << e.index << "' value='" << e.funding << "'>"
+              << "<input type='hidden' name='eov_" << e.index << "' value='" << eo << "'>"
+              << "<input type='hidden' name='etp_" << e.index << "' value='" << e.tpUnit << "'>"
+              << "<input type='hidden' name='esl_" << e.index << "' value='" << e.slUnit << "'>";
         }
         h << "<button>Save Entry Points</button></form>";
+        h << "<h2>Export to hledger</h2><form class='card' method='POST' action='/export-hledger'>"
+             "<h3>Generate hledger journal entries for this cycle</h3>"
+             "<input type='hidden' name='symbol' value='" << html::esc(sym) << "'>"
+             "<input type='hidden' name='feeSpread' value='" << p.feeSpread << "'>"
+             "<input type='hidden' name='surplusRate' value='" << p.surplusRate << "'>"
+             "<input type='hidden' name='eo' value='" << eo << "'>"
+             "<input type='hidden' name='entryCount' value='" << entries.size() << "'>";
+        for (const auto& e : entries)
+        {
+            if (e.funding <= 0) continue;
+            h << "<input type='hidden' name='ep_" << e.index << "' value='" << e.entryPrice << "'>"
+              << "<input type='hidden' name='eq_" << e.index << "' value='" << e.fundQty << "'>"
+              << "<input type='hidden' name='ef_" << e.index << "' value='" << e.funding << "'>"
+              << "<input type='hidden' name='etp_" << e.index << "' value='" << e.tpUnit << "'>";
+        }
+        h << "<label>Date</label><input type='date' name='journalDate' value='" << html::today() << "'><br>"
+             "<label>Savings Rate</label><input type='number' name='savingsRate' step='any' value='0.10'><br>"
+             "<button>Export Journal</button></form>";
         h << "<br><a class='btn' href='/serial-generator'>Back</a>";
         res.set_content(html::wrap("Serial Plan", h.str()), "text/html");
+    });
+
+    // ========== POST /export-hledger ==========
+    svr.Post("/export-hledger", [&](const httplib::Request& req, httplib::Response& res) {
+        auto f = parseForm(req.body);
+        std::string sym = normalizeSymbol(fv(f, "symbol"));
+        double feeSpread = fd(f, "feeSpread");
+        double surplusRate = fd(f, "surplusRate");
+        double eo = fd(f, "eo");
+        int count = fi(f, "entryCount");
+        std::string jdate = fv(f, "journalDate");
+        double savingsRate = fd(f, "savingsRate", 0.10);
+        if (jdate.empty()) jdate = html::today();
+        if (sym.empty() || count <= 0) { res.set_redirect("/serial-generator?err=Invalid+parameters", 303); return; }
+
+        struct JEntry { double price; double qty; double funding; double tp; };
+        std::vector<JEntry> jentries;
+        for (int i = 0; i < count; ++i)
+        {
+            std::string si = std::to_string(i);
+            double ep = fd(f, "ep_" + si);
+            double eq = fd(f, "eq_" + si);
+            double ef = fd(f, "ef_" + si);
+            double etp = fd(f, "etp_" + si);
+            if (ef <= 0) continue;
+            jentries.push_back({ep, eq, ef, etp});
+        }
+
+        std::string symLower = sym;
+        for (auto& c : symLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        std::ostringstream j;
+        j << std::fixed << std::setprecision(8);
+        j << "; Quant cycle \xe2\x80\x94 " << sym << " \xe2\x80\x94 generated " << jdate << "\n\n";
+
+        double totalCost = 0, totalRevenue = 0, totalFees = 0;
+
+        for (size_t i = 0; i < jentries.size(); ++i)
+        {
+            auto& e = jentries[i];
+            double fee = e.funding * feeSpread;
+            totalCost += e.funding;
+            totalFees += fee;
+            j << jdate << " Buy " << sym << " level " << i << "\n"
+              << "    assets:crypto:" << symLower << "    " << e.qty << " " << sym << " @ $" << e.price << "\n"
+              << "    expenses:fees:exchange       $" << fee << "\n"
+              << "    assets:bank:trading         $-" << (e.funding + fee) << "\n\n";
+        }
+
+        for (size_t i = 0; i < jentries.size(); ++i)
+        {
+            auto& e = jentries[i];
+            double revenue = e.tp * e.qty;
+            double fee = revenue * feeSpread;
+            totalRevenue += revenue;
+            totalFees += fee;
+            j << jdate << " Sell " << sym << " TP level " << i << "\n"
+              << "    assets:bank:trading          $" << (revenue - fee) << "\n"
+              << "    expenses:fees:exchange       $" << fee << "\n"
+              << "    assets:crypto:" << symLower << "   -" << e.qty << " " << sym << " @ $" << e.tp << "\n\n";
+        }
+
+        double gross = totalRevenue - totalCost - totalFees;
+        double savings = gross * savingsRate;
+        if (savings > 0)
+        {
+            j << jdate << " Quant savings extraction\n"
+              << "    assets:savings:quant         $" << savings << "\n"
+              << "    income:trading:quant        $-" << savings << "\n\n";
+        }
+
+        j << "; Total fees: $" << totalFees << "\n"
+          << "; Net profit: $" << gross << "\n"
+          << "; Savings:    $" << savings << "\n";
+
+        std::ostringstream h;
+        h << "<h1>hledger Journal: " << html::esc(sym) << "</h1>"
+             "<div class='msg'>Copy the journal below and append to your <code>~/.hledger.journal</code> inside docker-finance</div>"
+             "<pre style='background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow-x:auto;font-size:0.85em;white-space:pre-wrap;'>"
+          << html::esc(j.str()) << "</pre>"
+             "<button onclick='navigator.clipboard.writeText(document.querySelector(\"pre\").textContent)' class='btn' style='margin-bottom:12px;'>Copy to Clipboard</button>"
+             "<br><a class='btn' href='/serial-generator'>Back</a>";
+        res.set_content(html::wrap("hledger Export", h.str()), "text/html");
     });
 
     // ========== POST /save-serial ==========

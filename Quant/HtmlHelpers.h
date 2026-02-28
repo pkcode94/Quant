@@ -84,6 +84,21 @@ inline std::string esc(const std::string& s)
     return o;
 }
 
+// Today's date as "YYYY-MM-DD".
+inline std::string today()
+{
+    std::time_t now = std::time(nullptr);
+    std::tm tm;
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tm);
+    return buf;
+}
+
 inline std::string css()
 {
     return

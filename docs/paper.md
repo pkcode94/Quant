@@ -36,7 +36,7 @@ Every equation in this paper flows from one conditional: *if the TP is hit, fees
 
 **The fractional SL** ($\phi_{\text{sl}} < 1$) and **SL hedge buffer** ($n_{\text{sl}} > 0$) exist as controlled relaxations of these guarantees. They do not restore the unconditional determinism — they convert it into a probabilistic hedge that holds *on average* if the actual SL hit rate matches $n_{\text{sl}}$.
 
-**The default configuration (SL off, $\phi_{\text{sl}} = 1$, $n_{\text{sl}} = 0$) is the only configuration where every equation holds unconditionally.** For a complete analysis of all failure modes, see [`docs/failure-modes.md`](failure-modes.md).
+**The default configuration (SL off, $\phi_{\text{sl}} = 1$, $n_{\text{sl}} = 0$) is the only configuration where every equation holds unconditionally.** For a complete analysis of all failure modes, see [`docs/failure-modes.md`](failure-modes.md). For the intended operating envelope and best-case market conditions, see [`docs/best-case-use.md`](best-case-use.md).
 
 ---
 

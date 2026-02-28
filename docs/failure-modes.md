@@ -1,6 +1,6 @@
 # Failure Modes — When the Mathematics Breaks Down
 
-This document catalogues the conditions under which the deterministic guarantees of the framework (see [`paper.md`](paper.md)) no longer hold. Every failure mode listed here represents a scenario where one or more core assumptions are violated, causing the equations to produce results that do not match reality.
+This document catalogues the conditions under which the deterministic guarantees of the framework (see [`paper.md`](paper.md)) no longer hold. Every failure mode listed here represents a scenario where one or more core assumptions are violated, causing the equations to produce results that do not match reality. For the conditions under which all guarantees hold, see [`best-case-use.md`](best-case-use.md).
 
 The framework guarantees: *if TP is hit, fees are covered and surplus is captured*. Everything below describes what happens when that conditional is never satisfied, or when the inputs to the equations are no longer valid.
 
