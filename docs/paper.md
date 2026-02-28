@@ -83,6 +83,8 @@ where $P$ is the price per unit, $q$ is the quantity, $n_s$ is the number of sym
 
 **Interpretation.** OH is the fraction of position value consumed by fees. A position at OH = 0.03 needs a 3% price increase just to break even (before surplus). When $n_f > 0$, the overhead inflates proportionally — a trade with $n_f = 2$ needs roughly $3\times$ the overhead of $n_f = 0$ to pre-fund two future trades' fees.
 
+**Chain auto-derivation.** In chain mode (§9), $n_f$ is not a manual parameter — it is derived from the chain structure. Cycle $c$ in a $C$-cycle chain sets $n_f = C - 1 - c$: cycle 0 pre-funds $C-1$ future trades, the last cycle pre-funds 0. This means early cycles have wider TPs (hedging more future fees) and later cycles have tighter TPs (hedging only themselves), producing a natural convergence toward the surplus rate as the chain progresses.
+
 ### 3.3 Effective Overhead
 
 $$
@@ -511,11 +513,27 @@ $$
 
 This means TP targets compress toward entry prices with each cycle — the system becomes more capital-efficient over time. The surplus rate $s$ becomes the dominant cost, and the chain's per-cycle profit margin stabilises at approximately $s$.
 
-### 9.4 Superposition Metaphor
+### 9.4 Future Fee Pre-Funding
+
+Each cycle's overhead is automatically scaled by the number of remaining cycles:
+
+$$
+n_f^{(c)} = C - 1 - c
+$$
+
+Cycle 0 in a 5-cycle chain has $n_f = 4$ (its TP must pre-cover fees for 4 future trades). The last cycle has $n_f = 0$ (self-only). This creates a **decreasing overhead envelope** across the chain:
+
+$$
+\text{OH}_c \propto \frac{1 + (C - 1 - c)}{D_c}
+$$
+
+The two effects — growing capital (shrinking denominator contribution) and shrinking $n_f$ (shrinking numerator) — compound, making the convergence toward the surplus-only limit faster than either effect alone.
+
+### 9.5 Superposition Metaphor
 
 Before the market observes (reaches) an entry level, all levels exist as potential states. The price action "collapses" each level into an open position when it reaches the entry price, then "collapses" the exit when the TP is reached. The chain is a sequence of these collapses — a supercoordinate system where each cycle's levels are defined relative to the previous cycle's outcome.
 
-### 9.5 Savings as Irreversible Extraction
+### 9.6 Savings as Irreversible Extraction
 
 The savings diversion $s_{\text{save}}$ is an irreversible extraction from the system. Capital inside the chain compounds; savings exit the chain permanently. This creates a two-compartment model:
 

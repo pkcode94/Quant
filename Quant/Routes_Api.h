@@ -434,6 +434,8 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
 
             HorizonParams cp = p;
             cp.portfolioPump = capital;
+            // Each cycle pre-covers fees for the remaining cycles in the chain.
+            cp.futureTradeCount = chainCycles - 1 - ci;
             double cycleEo = MultiHorizonEngine::effectiveOverhead(currentPrice, qty, cp);
             double cycleOh = MultiHorizonEngine::computeOverhead(currentPrice, qty, cp);
             double dtBuffer = MultiHorizonEngine::calculateDowntrendBuffer(
@@ -1330,6 +1332,8 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
         {
             HorizonParams cp = p;
             cp.portfolioPump = capital;
+            // Each cycle pre-covers fees for the remaining cycles in the chain.
+            cp.futureTradeCount = chainCycles - 1 - ci;
             double cycleEo = MultiHorizonEngine::effectiveOverhead(currentPrice, qty, cp);
             double cycleOh = MultiHorizonEngine::computeOverhead(currentPrice, qty, cp);
             double dtBuffer = MultiHorizonEngine::calculateDowntrendBuffer(
