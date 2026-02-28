@@ -4,6 +4,31 @@
 
 ---
 
+> **⚠️ READ THIS FIRST — Stop Losses and the Limits of Deterministic Fee Hedging**
+>
+> **Stop losses are deactivated by default. This is intentional.**
+>
+> The entire framework is built on one guarantee: *if a take-profit target is hit, all fees are covered and the surplus is captured*. Every equation — overhead, effective overhead, downtrend buffer, chain compounding — flows from that single conditional. The system is deterministic **given that exits happen at TP**.
+>
+> **Stop losses break this guarantee.** When an SL triggers, the position exits at a loss. The overhead that was embedded into the TP is never recovered. The fees from the buy side are realised but not hedged. The chain's capital shrinks instead of growing. The compounding recurrence in §9 reverses: $T_{c+1} < T_c$, overhead *increases*, and the system enters a death spiral where each cycle needs a wider TP to recover the accumulated losses — but wider TPs are less likely to be hit.
+>
+> **Specifically, activating stop losses can:**
+>
+> 1. **Invalidate fee neutrality.** The coverage ratio (§11.4) drops below 1. Fees are no longer fully hedged.
+> 2. **Break chain compounding.** A single SL hit in cycle $c$ can wipe out the profit from cycles $0$ through $c-1$, especially if $\phi_{\text{sl}} = 1$ (full exit).
+> 3. **Create negative feedback loops.** SL loss → less capital → higher overhead → wider TP → lower fill probability → more SL hits.
+> 4. **Conflict with the downtrend buffer.** The buffer pre-funds re-entry after a *profitable* exit. If the exit was an SL loss, the buffer's extra TP margin was wasted — it inflated the TP that was never hit.
+>
+> **When you might use them anyway:**
+>
+> - With **fractional SL** ($\phi_{\text{sl}} \ll 1$): trimming 10–25% of a position at SL is survivable. The remaining position can still hit its TP and recover.
+> - With **SL hedge buffer** ($n_{\text{sl}} > 0$): pre-funds future SL losses via TP inflation. This restores the deterministic guarantee *on average* — if you expect $n_{\text{sl}}$ SL hits per profitable cycle, the extra TP profit covers them.
+> - In **highly leveraged or volatile markets** where a 100% drawdown is possible and any exit is better than liquidation.
+>
+> **The default configuration ($\phi_{\text{sl}} = 1$, SL off, $n_{\text{sl}} = 0$) is the only configuration where every equation in this paper holds unconditionally.** Any other configuration introduces probabilistic assumptions about SL hit rates that the deterministic framework cannot verify. See [`docs/failure-modes.md`](docs/failure-modes.md) for a complete analysis of when the mathematics breaks down.
+
+---
+
 ## 1. Introduction
 
 ### 1.1 The Problem
