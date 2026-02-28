@@ -682,10 +682,10 @@ static void marketEntry(TradeDatabase& db)
 
     for (const auto& el : levels)
     {
-        double discount = ((cur - el.entryPrice) / cur) * 100.0;
+        double disc = QuantMath::discount(cur, el.entryPrice);
         std::cout << "    [" << el.index << "]\n"
                   << "        entry price      = " << el.entryPrice
-                  << "  (" << discount << "% below market)\n"
+                  << "  (" << disc << "% below market)\n"
                   << "        break-even price = " << el.breakEven
                   << "  (min price to recover all fees + overhead)\n"
                   << "        potential profit = " << el.potentialNet
@@ -714,16 +714,8 @@ static void marketEntry(TradeDatabase& db)
         ep.fundingQty         = el.fundingQty;
         ep.effectiveOverhead  = eo;
         ep.isShort            = isShort;
-        if (isShort)
-        {
-            ep.exitTakeProfit = el.entryPrice * (1.0 - eo);
-            ep.exitStopLoss   = el.entryPrice * (1.0 + eo);
-        }
-        else
-        {
-            ep.exitTakeProfit = el.entryPrice * (1.0 + eo);
-            ep.exitStopLoss   = el.entryPrice * (1.0 - eo);
-        }
+        ep.exitTakeProfit = QuantMath::breakEven(el.entryPrice, isShort ? -eo : eo);
+        ep.exitStopLoss   = QuantMath::levelSL(el.entryPrice, eo, isShort);
         entryPoints.push_back(ep);
     }
 
@@ -745,7 +737,7 @@ static void marketEntry(TradeDatabase& db)
             double buyQty = (levels[i].fundingQty > 0.0) ? levels[i].fundingQty : 0.0;
             if (buyQty <= 0.0) continue;
 
-            double cost = levels[i].entryPrice * buyQty;
+            double cost = QuantMath::cost(levels[i].entryPrice, buyQty);
             std::ostringstream fp;
             fp << std::fixed << std::setprecision(2)
                << "    [" << levels[i].index << "] " << buyQty
@@ -757,8 +749,7 @@ static void marketEntry(TradeDatabase& db)
             double totalNeeded = cost + buyFee;
             if (totalNeeded > walBal)
             {
-                double maxQty = (levels[i].entryPrice > 0.0)
-                    ? (walBal - buyFee) / levels[i].entryPrice : 0.0;
+                double maxQty = QuantMath::fundedQty(levels[i].entryPrice, walBal - buyFee);
                 if (maxQty <= 0.0)
                 {
                     std::cout << "    [" << levels[i].index
@@ -770,7 +761,7 @@ static void marketEntry(TradeDatabase& db)
                           << "] capped: " << buyQty << " -> " << maxQty
                           << " (wallet=" << walBal << ")\n";
                 buyQty = maxQty;
-                cost   = levels[i].entryPrice * buyQty;
+                cost   = QuantMath::cost(levels[i].entryPrice, buyQty);
             }
 
             int bid = db.executeBuy(sym, levels[i].entryPrice, buyQty);
@@ -784,8 +775,8 @@ static void marketEntry(TradeDatabase& db)
             auto* tradePtr = db.findTradeById(trades, bid);
             if (tradePtr)
             {
-                tradePtr->takeProfit     = entryPoints[i].exitTakeProfit * tradePtr->quantity;
-                tradePtr->stopLoss       = entryPoints[i].exitStopLoss * tradePtr->quantity;
+                tradePtr->takeProfit     = QuantMath::cost(entryPoints[i].exitTakeProfit, tradePtr->quantity);
+                tradePtr->stopLoss       = QuantMath::cost(entryPoints[i].exitStopLoss, tradePtr->quantity);
                 tradePtr->stopLossActive = false;
                 db.updateTrade(*tradePtr);
             }
@@ -934,7 +925,7 @@ static void exitStrategy(TradeDatabase& db)
 
         for (const auto& el : levels)
         {
-            double pctGain = ((el.tpPrice - tp->value) / tp->value) * 100.0;
+            double pctGain = QuantMath::pctGain(tp->value, el.tpPrice);
             std::cout << "    [" << el.index << "]"
                       << "  trigger=" << el.tpPrice
                       << "  (+" << pctGain << "%)"
@@ -1123,10 +1114,10 @@ static void priceCheck(TradeDatabase& db)
 
         double cur = priceForSymbol(t.symbol);
 
-        double cost = t.value * remaining;
+        double tradeCost = QuantMath::cost(t.value, remaining);
         std::cout << "  #" << t.tradeId << "  " << t.symbol
                   << "  entry=" << t.value << "  qty=" << remaining
-                  << "  cost=" << cost
+                  << "  cost=" << tradeCost
                   << "  market=" << cur << "\n";
         double buyFees  = readDouble("    Buy fee: ");
         double sellFees = readDouble("    Sell fee: ");
@@ -1403,14 +1394,14 @@ static void dcaTracker(TradeDatabase& db)
         for (const auto& u : trades)
         {
             if (u.symbol != t.symbol || u.type != TradeType::Buy) continue;
-            totalCost += u.value * u.quantity;
+            totalCost += QuantMath::cost(u.value, u.quantity);
             totalQty  += u.quantity;
             if (u.value < minPrice) minPrice = u.value;
             if (u.value > maxPrice) maxPrice = u.value;
             ++count;
         }
 
-        double avgPrice = (totalQty != 0.0) ? totalCost / totalQty : 0.0;
+        double avgPrice = QuantMath::avgEntry(totalCost, totalQty);
 
         std::cout << "    " << t.symbol << "\n"
                   << "        buy trades     = " << count << "\n"

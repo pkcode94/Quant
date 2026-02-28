@@ -388,12 +388,12 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
             if (ep.traded) continue;
             if (fv(f, "exec_" + std::to_string(ep.entryId)).empty()) continue;
             if (ep.funding <= 0) continue;
-            double execQty = (ep.fundingQty > 0) ? ep.fundingQty : (ep.entryPrice > 0) ? ep.funding / ep.entryPrice : 0;
+            double execQty = (ep.fundingQty > 0) ? ep.fundingQty : QuantMath::fundedQty(ep.entryPrice, ep.funding);
             if (execQty <= 0) continue;
             double buyFee = fd(f, "fee_" + std::to_string(ep.entryId));
-            double cost = ep.entryPrice * execQty + buyFee;
+            double execCost = QuantMath::cost(ep.entryPrice, execQty) + buyFee;
             double walBal = db.loadWalletBalance();
-            if (cost > walBal) { ++failed; continue; }
+            if (execCost > walBal) { ++failed; continue; }
             int bid = db.executeBuy(ep.symbol, ep.entryPrice, execQty, buyFee);
             ep.traded = true; ep.linkedTradeId = bid; ++executed;
         }
@@ -405,8 +405,8 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
                 if (ep.linkedTradeId < 0) continue;
                 auto* tradePtr = db.findTradeById(trades, ep.linkedTradeId);
                 if (!tradePtr) continue;
-                tradePtr->takeProfit = ep.exitTakeProfit * tradePtr->quantity;
-                tradePtr->stopLoss = ep.exitStopLoss * tradePtr->quantity;
+                tradePtr->takeProfit = QuantMath::cost(ep.exitTakeProfit, tradePtr->quantity);
+                tradePtr->stopLoss = QuantMath::cost(ep.exitStopLoss, tradePtr->quantity);
                 tradePtr->stopLossActive = false;
                 db.updateTrade(*tradePtr);
             }
@@ -471,14 +471,14 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
         if (newPrice > 0) ep.entryPrice = newPrice;
         if (newFunding > 0) ep.funding = newFunding;
         if (newQty > 0) ep.fundingQty = newQty;
-        else if (ep.entryPrice > 0) ep.fundingQty = ep.funding / ep.entryPrice;
+        else if (ep.entryPrice > 0) ep.fundingQty = QuantMath::fundedQty(ep.entryPrice, ep.funding);
         double eo = ep.effectiveOverhead;
         if (newTP > 0) ep.exitTakeProfit = newTP;
-        else if (ep.entryPrice > 0) ep.exitTakeProfit = ep.isShort ? ep.entryPrice * (1.0 - eo) : ep.entryPrice * (1.0 + eo);
+        else if (ep.entryPrice > 0) ep.exitTakeProfit = QuantMath::breakEven(ep.entryPrice, ep.isShort ? -eo : eo);
         if (newSL > 0) ep.exitStopLoss = newSL;
-        else if (ep.entryPrice > 0) ep.exitStopLoss = ep.isShort ? ep.entryPrice * (1.0 + eo) : ep.entryPrice * (1.0 - eo);
+        else if (ep.entryPrice > 0) ep.exitStopLoss = QuantMath::levelSL(ep.entryPrice, eo, ep.isShort);
         if (newBE > 0) ep.breakEven = newBE;
-        else if (ep.entryPrice > 0) ep.breakEven = ep.entryPrice * (1.0 + ep.effectiveOverhead);
+        else if (ep.entryPrice > 0) ep.breakEven = QuantMath::breakEven(ep.entryPrice, eo);
         db.saveEntryPoints(pts);
         res.set_redirect("/entry-points?msg=Entry+" + std::to_string(id) + "+updated", 303);
     });

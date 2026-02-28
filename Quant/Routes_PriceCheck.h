@@ -81,11 +81,12 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
             if (remaining <= 0) continue;
             double cur = priceFor(t.symbol);
             if (cur <= 0) continue;
-            double gross = (cur - t.value) * remaining;
             double remainFrac = (t.quantity > 0) ? remaining / t.quantity : 0.0;
-            double net = gross - t.buyFee * remainFrac;
-            double cost = (t.value * remaining) + (t.buyFee * remainFrac);
-            double roi = (cost != 0.0) ? (net / cost) * 100.0 : 0.0;
+            auto pnl = QuantMath::computeProfit(t.value, cur, remaining,
+                t.buyFee * remainFrac, 0.0);
+            double gross = pnl.gross;
+            double net   = pnl.net;
+            double roi   = pnl.roiPct;
             double tpPrice = 0, slPrice = 0;
             bool tpHit = false, slHit = false;
             if (t.takeProfit > 0) { tpPrice = t.takeProfit / t.quantity; tpHit = (cur >= tpPrice); }

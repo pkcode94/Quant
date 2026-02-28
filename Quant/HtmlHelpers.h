@@ -217,14 +217,21 @@ inline std::string traceOverhead(double price, double quantity,
 {
     std::ostringstream c;
     c << std::fixed << std::setprecision(8);
+    // Canonical values from QuantMath
+    double oh = QuantMath::overhead(price, quantity,
+        p.feeSpread, p.feeHedgingCoefficient, p.deltaTime,
+        p.symbolCount, p.portfolioPump, p.coefficientK,
+        p.futureTradeCount);
+    double eo = QuantMath::effectiveOverhead(oh,
+        p.surplusRate, p.feeSpread,
+        p.feeHedgingCoefficient, p.deltaTime);
+    // Sub-terms for display trace only
     double fc  = p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
     double num = fc * static_cast<double>(p.symbolCount);
     double ppq = (quantity > 0.0) ? price / quantity : 0.0;
     double den = ppq * p.portfolioPump + p.coefficientK;
-    double oh  = (den != 0.0) ? num / den : 0.0;
     double surpComp = p.surplusRate * p.feeHedgingCoefficient * p.deltaTime;
     double feeComp  = p.feeSpread * p.feeHedgingCoefficient * p.deltaTime;
-    double eo  = oh + surpComp + feeComp;
     c << "<span class='hd'>Overhead</span>"
       << "feeComponent = <span class='fm'>" << p.feeSpread << " &times; " << p.feeHedgingCoefficient << " &times; " << p.deltaTime << "</span>"
       << " = <span class='vl'>" << fc << "</span>\n"
@@ -269,15 +276,15 @@ inline std::string traceProfit(const Trade& t, double curPrice,
         c << "<span class='fm'>grossProfit</span>  = (entry - current) &times; qty\n"
           << "               = (" << t.value << " - " << curPrice << ") &times; " << t.quantity
           << " = <span class='vl'>" << r.grossProfit << "</span>\n";
-    double cost = t.value * t.quantity + buyFees;
+    double traceCost = QuantMath::cost(t.value, t.quantity) + buyFees;
     c << "<span class='fm'>netProfit</span>    = gross - buyFees - sellFees\n"
       << "               = " << r.grossProfit << " - " << buyFees << " - " << sellFees
       << " = <span class='rs'>" << r.netProfit << "</span>\n"
       << "<span class='fm'>cost</span>         = entry &times; qty + buyFees\n"
       << "               = " << t.value << " &times; " << t.quantity << " + " << buyFees
-      << " = <span class='vl'>" << cost << "</span>\n"
+      << " = <span class='vl'>" << traceCost << "</span>\n"
       << "<span class='fm'>ROI</span>          = (net / cost) &times; 100\n"
-      << "               = (" << r.netProfit << " / " << cost << ") &times; 100"
+      << "               = (" << r.netProfit << " / " << traceCost << ") &times; 100"
       << " = <span class='rs'>" << r.roi << "%</span>\n";
     return c.str();
 }

@@ -205,10 +205,10 @@ public:
 
                 double qty   = ce.levels[ei].fundingQty;
                 if (qty < EPS) continue;
-                double cost  = ce.levels[ei].entryPrice * qty;
-                double fee   = cost * cfg.buyFeeRate;
+                double entryCost = QuantMath::cost(ce.levels[ei].entryPrice, qty);
+                double fee   = QuantMath::feeFromRate(entryCost, cfg.buyFeeRate);
 
-                if (cost + fee > capital) continue;
+                if (entryCost + fee > capital) continue;
 
                 int tid = idGen.acquire();
                 idGen.commit(tid);
@@ -223,7 +223,7 @@ public:
                 st.remaining  = qty;
                 st.entryTime  = now;
 
-                capital   -= (cost + fee);
+                capital   -= (entryCost + fee);
                 totalFees += fee;
 
                 // Pre-compute exit levels for this position ONCE
@@ -237,7 +237,7 @@ public:
                 // Use a HorizonParams with portfolioPump = trade cost
                 // so overhead is meaningful relative to this position
                 HorizonParams exitParams = cfg.horizonParams;
-                exitParams.portfolioPump = cost;
+                exitParams.portfolioPump = entryCost;
 
                 auto exitLevels = ExitStrategyCalculator::generate(
                     tmpTrade, exitParams,
@@ -250,19 +250,26 @@ public:
 
                 // Apply downtrend buffer and SL hedge buffer to exit TP prices
                 {
-                    double eo = MultiHorizonEngine::effectiveOverhead(
-                        st.entryPrice, st.quantity, exitParams);
+                    double eo = QuantMath::effectiveOverhead(
+                        QuantMath::overhead(st.entryPrice, st.quantity,
+                            exitParams.feeSpread, exitParams.feeHedgingCoefficient,
+                            exitParams.deltaTime, exitParams.symbolCount,
+                            exitParams.portfolioPump, exitParams.coefficientK,
+                            exitParams.futureTradeCount),
+                        exitParams.surplusRate, exitParams.feeSpread,
+                        exitParams.feeHedgingCoefficient, exitParams.deltaTime);
+                    double delta = QuantMath::positionDelta(
+                        st.entryPrice, st.quantity, exitParams.portfolioPump);
+                    double lower = exitParams.minRisk;
+                    double upper = (exitParams.maxRisk > 0.0) ? exitParams.maxRisk : eo;
+                    if (upper < lower) upper = lower;
                     double dtBuf = (cfg.downtrendCount > 0)
-                        ? MultiHorizonEngine::calculateDowntrendBuffer(
-                              st.entryPrice, st.quantity, exitParams.portfolioPump,
-                              eo, exitParams.minRisk, exitParams.maxRisk,
-                              cfg.downtrendCount)
+                        ? QuantMath::sigmoidBuffer(delta, lower, upper, cfg.downtrendCount)
                         : 1.0;
-                    double slFrac = MultiHorizonEngine::stopLossSellFraction(exitParams);
-                    double slBuf = MultiHorizonEngine::calculateStopLossBuffer(
-                        st.entryPrice, st.quantity, exitParams.portfolioPump,
-                        eo, exitParams.minRisk, exitParams.maxRisk,
-                        slFrac, exitParams.stopLossHedgeCount);
+                    double slFrac = QuantMath::clamp01(exitParams.stopLossFraction);
+                    double slBuf = QuantMath::sigmoidBuffer(
+                        delta, lower * slFrac, upper * slFrac,
+                        exitParams.stopLossHedgeCount);
                     double combinedBuf = dtBuf * slBuf;
                     if (combinedBuf > 1.0)
                     {
@@ -300,9 +307,9 @@ public:
                     double sellQty = std::min(el.sellQty, pos.trade.remaining);
                     if (sellQty < EPS) { pos.exitFilled[li] = true; continue; }
 
-                    double sellFee = el.tpPrice * sellQty * cfg.sellFeeRate;
-                    double gross   = (el.tpPrice - pos.trade.entryPrice) * sellQty;
-                    double net     = gross - sellFee;
+                    double sellFee = QuantMath::feeFromRate(QuantMath::cost(el.tpPrice, sellQty), cfg.sellFeeRate);
+                    double gross   = QuantMath::grossProfit(pos.trade.entryPrice, el.tpPrice, sellQty);
+                    double net     = QuantMath::netProfit(gross, 0.0, sellFee);
 
                     SimSell ss;
                     ss.buyId       = pos.trade.id;
@@ -317,7 +324,7 @@ public:
                     ss.sellTime    = now;
 
                     pos.trade.remaining -= sellQty;
-                    capital             += (el.tpPrice * sellQty - sellFee);
+                    capital             += QuantMath::proceeds(el.tpPrice, sellQty, sellFee);
                     realized            += net;
                     totalFees           += sellFee;
 
@@ -365,7 +372,7 @@ public:
 
                     if (cycleProfit > 0 && cfg.savingsRate > 0)
                     {
-                        double saved = cycleProfit * cfg.savingsRate;
+                        double saved = QuantMath::savings(cycleProfit, cfg.savingsRate);
                         savings += saved;
                         capital -= saved;
                     }

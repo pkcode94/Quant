@@ -251,7 +251,7 @@ public:
         std::vector<HorizonLevel> levels;
         levels.reserve(p.horizonCount);
 
-        double base     = trade.value * trade.quantity;
+        double base     = QuantMath::cost(trade.value, trade.quantity);
         double eo       = effectiveOverhead(trade, p);
         double oh       = computeOverhead(trade, p);
 

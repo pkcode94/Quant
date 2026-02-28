@@ -618,7 +618,7 @@ public:
             double remaining = t.quantity - sold - released;
             if (remaining <= 0) continue;
             double remainFrac = t.quantity > 0 ? remaining / t.quantity : 0.0;
-            deployed += t.value * remaining + t.buyFee * remainFrac;
+            deployed += QuantMath::cost(t.value, remaining) + t.buyFee * remainFrac;
         }
         return deployed;
     }
@@ -749,12 +749,12 @@ public:
         sell.timestamp     = static_cast<long long>(std::time(nullptr));
         addTrade(sell);
 
-        double proceeds = sellPrice * sellQty - sellFee;
-        deposit(proceeds);
+        double saleProceeds = QuantMath::proceeds(sellPrice, sellQty, sellFee);
+        deposit(saleProceeds);
 
         // record realized P&L
-        double gp = (sellPrice - parent->value) * sellQty;
-        double np = gp - sellFee;
+        double gp = QuantMath::grossProfit(parent->value, sellPrice, sellQty);
+        double np = QuantMath::netProfit(gp, 0.0, sellFee);
         recordPnl(symbol, sell.tradeId, parentTradeId,
                   parent->value, sellPrice, sellQty, gp, np);
 
@@ -778,8 +778,8 @@ public:
         buy.timestamp  = static_cast<long long>(std::time(nullptr));
         addTrade(buy);
 
-        double cost = price * qty + buyFee;
-        withdraw(cost);
+        double buyCost = QuantMath::cost(price, qty) + buyFee;
+        withdraw(buyCost);
 
         return buy.tradeId;
     }

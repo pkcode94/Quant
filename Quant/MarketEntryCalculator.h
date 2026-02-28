@@ -101,7 +101,7 @@ public:
             el.funding         = p.portfolioPump * el.fundingFraction;
             el.fundingQty      = QuantMath::fundedQty(el.entryPrice, el.funding);
 
-            el.potentialNet = (currentPrice - el.entryPrice) * el.fundingQty;
+            el.potentialNet = QuantMath::grossProfit(el.entryPrice, currentPrice, el.fundingQty);
 
             levels.push_back(el);
         }

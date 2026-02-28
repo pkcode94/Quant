@@ -27,8 +27,8 @@ public:
         bool isShort = (trade.type != TradeType::Buy);
         r.grossProfit = QuantMath::grossProfit(trade.value, currentPrice, qty, isShort);
         r.netProfit = QuantMath::netProfit(r.grossProfit, buyFees, sellFees);
-        double cost = trade.value * qty + buyFees;
-        r.roi = QuantMath::roi(r.netProfit, cost);
+        double c = QuantMath::cost(trade.value, qty) + buyFees;
+        r.roi = QuantMath::roi(r.netProfit, c);
         return r;
     }
 
@@ -44,8 +44,8 @@ public:
         ProfitResult r{};
         r.grossProfit = QuantMath::grossProfit(parentEntry, sell.value, sell.quantity);
         r.netProfit   = QuantMath::netProfit(r.grossProfit, sell.buyFee, sell.sellFee);
-        double cost   = parentEntry * sell.quantity + sell.buyFee;
-        r.roi = QuantMath::roi(r.netProfit, cost);
+        double c      = QuantMath::cost(parentEntry, sell.quantity) + sell.buyFee;
+        r.roi = QuantMath::roi(r.netProfit, c);
         return r;
     }
 };
