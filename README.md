@@ -368,13 +368,13 @@ $$
 **Per-cycle buffer:**
 
 $$
-\text{per\_cycle} = R_{\min} + \hat\sigma_{\alpha_d}(t) \cdot (\text{upper} - R_{\min})
+\text{pc} = R_{\min} + \hat\sigma_{\alpha_d}(t) \cdot (\text{upper} - R_{\min})
 $$
 
 **Total buffer:**
 
 $$
-\text{buffer} = 1 + n_d \cdot \text{per\_cycle}
+\text{buffer} = 1 + n_d \cdot \text{pc}
 $$
 
 $$
