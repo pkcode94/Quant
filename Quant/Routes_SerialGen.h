@@ -119,6 +119,13 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         for (int i = 0; i < N; ++i)
         { weights[i] = (1.0 - riskClamped) * norm[i] + riskClamped * (1.0 - norm[i]);
           if (weights[i] < 1e-12) weights[i] = 1e-12; weightSum += weights[i]; }
+        // Pre-compute per-level funding for SL capital-loss cap.
+        std::vector<double> fundings(N);
+        for (int i = 0; i < N; ++i)
+            fundings[i] = (weightSum > 0) ? availableFunds * weights[i] / weightSum : 0;
+        // Clamp ?_sl so total worst-case SL loss ? available capital.
+        if (genSL)
+            slFrac = MultiHorizonEngine::clampStopLossFraction(slFrac, eo, fundings, availableFunds);
         for (int i = 0; i < N; ++i)
         {
             double entryPrice = priceLow + norm[i] * (priceHigh - priceLow);
@@ -140,6 +147,8 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
             entries.push_back({i, entryPrice, breakEven, disc, funding, fundFrac, fundQty, tpTotal, tpPrice, tpGross, slTotal, slPrice, slLoss, slSellQty});
         }
         h << "<h1>Serial Plan: " << html::esc(sym) << " @ " << cur << "</h1>";
+        double totalSlLoss = 0;
+        if (genSL) { for (const auto& e : entries) totalSlLoss += std::abs(e.slLoss); }
         h << "<div class='row'>"
              "<div class='stat'><div class='lbl'>Overhead</div><div class='val'>" << (overhead * 100) << "%</div></div>"
              "<div class='stat'><div class='lbl'>Effective</div><div class='val'>" << (eo * 100) << "%</div></div>"
@@ -150,7 +159,11 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
              "<div class='stat'><div class='lbl'>DT Buffer</div><div class='val'>" << dtBuffer << "x</div></div>"
              "<div class='stat'><div class='lbl'>SL Buffer</div><div class='val'>" << slBuffer << "x</div></div>"
              "<div class='stat'><div class='lbl'>SL Frac</div><div class='val'>" << (slFrac * 100) << "%</div></div>"
-             "<div class='stat'><div class='lbl'>Future Fees</div><div class='val'>" << p.futureTradeCount << "</div></div></div>";
+             "<div class='stat'><div class='lbl'>Future Fees</div><div class='val'>" << p.futureTradeCount << "</div></div>";
+        if (genSL)
+             h << "<div class='stat'><div class='lbl'>Max SL Loss</div><div class='val sell'>" << totalSlLoss << "</div></div>"
+                  "<div class='stat'><div class='lbl'>SL/Capital</div><div class='val" << (totalSlLoss > availableFunds ? " sell" : "") << "'>" << (availableFunds > 0 ? (totalSlLoss / availableFunds * 100) : 0) << "%</div></div>";
+        h << "</div>";
         h << "<h2>Entry + Exit Tuples</h2><table><tr><th>Lvl</th><th>Entry</th><th>Discount</th><th>Qty</th><th>Cost</th>"
              "<th>Break Even</th><th>TP/unit</th><th>TP Total</th><th>TP Gross</th>";
         if (genSL) h << "<th>SL/unit</th><th>SL Qty</th><th>SL Total</th><th>SL Loss</th>";

@@ -250,6 +250,38 @@ public:
 
 
 
+    // Capital-loss cap: clamp ?_sl so that the summed worst-case SL
+    // losses across all N levels never exceed the available capital.
+    //
+    // Total worst-case loss = ? EO · P_e(i) · q_i · ?_sl  =  ?_sl · ? EO · funding_i
+    //
+    // If that sum exceeds availableCapital, scale ?_sl down:
+    //   ?_sl_clamped = availableCapital / totalExposure
+    //
+    // Returns the (possibly reduced) ?_sl.  When SLs are off or
+    // availableCapital ? 0 the input fraction is returned unchanged.
+    static double clampStopLossFraction(double slFraction,
+                                        double eo,
+                                        const std::vector<double>& fundings,
+                                        double availableCapital)
+    {
+        if (slFraction <= 0.0 || availableCapital <= 0.0)
+            return slFraction;
+
+        double totalExposure = 0.0;
+        for (double f : fundings)
+            totalExposure += eo * f;
+
+        totalExposure *= slFraction;
+
+        if (totalExposure <= 0.0 || totalExposure <= availableCapital)
+            return slFraction;
+
+        // Scale ?_sl so total loss = availableCapital exactly.
+        double clamped = slFraction * (availableCapital / totalExposure);
+        return (clamped < 0.0) ? 0.0 : (clamped > 1.0) ? 1.0 : clamped;
+    }
+
     // Downtrend buffer: position-derived TP multiplier with
     // axis-dependent sigmoid curvature (§5.5).
     //

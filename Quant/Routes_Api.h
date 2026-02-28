@@ -445,10 +445,19 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
                 currentPrice, qty, capital, cycleEo, cp.minRisk, cp.maxRisk, slFrac, cp.stopLossHedgeCount);
             double combinedBuffer = dtBuffer * slBuf;
 
+            // Clamp φ_sl so total worst-case SL loss ≤ cycle capital.
+            if (genSL) {
+                std::vector<double> cycleFundings(N);
+                for (int i = 0; i < N; ++i)
+                    cycleFundings[i] = (weightSum > 0) ? capital * weights[i] / weightSum : 0;
+                slFrac = MultiHorizonEngine::clampStopLossFraction(slFrac, cycleEo, cycleFundings, capital);
+            }
+
             j << "{\"cycle\":" << ci
               << ",\"capital\":" << capital
               << ",\"overhead\":" << cycleOh
               << ",\"effective\":" << cycleEo
+              << ",\"slFrac\":" << slFrac
               << ",\"levels\":[";
 
             double cycleProfit = 0;
@@ -1343,6 +1352,15 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
                 currentPrice, qty, capital, cycleEo, cp.minRisk, cp.maxRisk, slFrac2, cp.stopLossHedgeCount);
             double combinedBuffer = dtBuffer * slBuf2;
 
+            // Clamp φ_sl so total worst-case SL loss ≤ cycle capital.
+            double slFracSave = slFrac2;
+            if (genSL) {
+                std::vector<double> cycleFundings(N);
+                for (int i = 0; i < N; ++i)
+                    cycleFundings[i] = (weightSum > 0) ? capital * weights[i] / weightSum : 0;
+                slFracSave = MultiHorizonEngine::clampStopLossFraction(slFrac2, cycleEo, cycleFundings, capital);
+            }
+
             std::vector<int> cycleEntryIds;
             double cycleProfit = 0;
 
@@ -1546,6 +1564,15 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
             double cycleOh = MultiHorizonEngine::computeOverhead(tradePrice, qty, cp);
             double dtBuffer = MultiHorizonEngine::calculateDowntrendBuffer(
                 tradePrice, qty, capital, cycleEo, cp.minRisk, cp.maxRisk, downtrendCount);
+
+            // Clamp φ_sl so total worst-case SL loss ≤ cycle capital.
+            double slFracFt = MultiHorizonEngine::stopLossSellFraction(cp);
+            if (genSL) {
+                std::vector<double> cycleFundings(N);
+                for (int i = 0; i < N; ++i)
+                    cycleFundings[i] = (weightSum > 0) ? capital * weights[i] / weightSum : 0;
+                slFracFt = MultiHorizonEngine::clampStopLossFraction(slFracFt, cycleEo, cycleFundings, capital);
+            }
 
             std::vector<int> cycleEntryIds;
             double cycleProfit = 0;

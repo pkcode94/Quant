@@ -24,6 +24,20 @@ The answer is yes, provided we can express total overhead as a fraction of the p
 
 4. **Composability.** Each component — entry calculator, horizon engine, exit strategy, serial generator — is independently useful but designed to compose into chains and cycles.
 
+### 1.3 Stop Losses — Read This First
+
+> **Stop losses are deactivated by default. This is intentional and critical to the framework's guarantees.**
+
+Every equation in this paper flows from one conditional: *if the TP is hit, fees are covered*. Stop losses violate this conditional by forcing an exit before the TP is reached. When an SL triggers:
+
+1. **Fee neutrality breaks.** The overhead embedded in the TP is never recovered. Buy fees are realised but unhedged. The coverage ratio (§11.4) drops below 1.
+2. **Chain compounding reverses.** Capital shrinks ($T_{c+1} < T_c$), overhead increases, TPs widen, fill probability drops, and the system enters a negative feedback spiral (see [failure-modes.md](failure-modes.md) §4).
+3. **Downtrend buffer is wasted.** The buffer pre-funds re-entry after a *profitable* exit. An SL exit is not profitable — the buffer's TP inflation was never captured.
+
+**The fractional SL** ($\phi_{\text{sl}} < 1$) and **SL hedge buffer** ($n_{\text{sl}} > 0$) exist as controlled relaxations of these guarantees. They do not restore the unconditional determinism — they convert it into a probabilistic hedge that holds *on average* if the actual SL hit rate matches $n_{\text{sl}}$.
+
+**The default configuration (SL off, $\phi_{\text{sl}} = 1$, $n_{\text{sl}} = 0$) is the only configuration where every equation holds unconditionally.** For a complete analysis of all failure modes, see [`docs/failure-modes.md`](failure-modes.md).
+
 ---
 
 ## 2. The Sigmoid Building Block
