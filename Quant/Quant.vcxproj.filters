@@ -110,5 +110,8 @@
     <ClInclude Include="QuantMath.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="json.h">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

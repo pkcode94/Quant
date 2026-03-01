@@ -5,6 +5,7 @@
 #include "ProfitCalculator.h"
 #include "IdGenerator.h"
 #include "PriceSeries.h"
+#include "json.h"
 
 #include <string>
 #include <vector>
@@ -55,27 +56,26 @@ public:
 
     void saveTrades(const std::vector<Trade>& trades)
     {
-        std::ofstream f(tradesPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + tradesPath());
-
+        njs3::js_array arr;
         for (const auto& t : trades)
         {
-            f << t.symbol       << ','
-              << t.tradeId      << ','
-              << static_cast<int>(t.type) << ','
-              << std::fixed << std::setprecision(17)
-              << t.value        << ','
-              << t.quantity     << ','
-              << t.parentTradeId << ','
-              << t.takeProfit   << ','
-              << t.stopLoss     << ','
-              << t.stopLossActive << ','
-              << t.shortEnabled  << ','
-              << t.buyFee        << ','
-              << t.sellFee       << ','
-              << t.timestamp
-              << '\n';
+            njs3::json j(njs3::js_object{});
+            j["symbol"] = JStr(t.symbol);
+            j["tradeId"] = JI(t.tradeId);
+            j["type"] = JI(static_cast<int>(t.type));
+            j["value"] = JD(t.value);
+            j["quantity"] = JD(t.quantity);
+            j["parentTradeId"] = JI(t.parentTradeId);
+            j["takeProfit"] = JD(t.takeProfit);
+            j["stopLoss"] = JD(t.stopLoss);
+            j["stopLossActive"] = JB(t.stopLossActive);
+            j["shortEnabled"] = JB(t.shortEnabled);
+            j["buyFee"] = JD(t.buyFee);
+            j["sellFee"] = JD(t.sellFee);
+            j["timestamp"] = JLL(t.timestamp);
+            arr.push_back(std::move(j));
         }
+        writeJson(tradesPath(), njs3::json(std::move(arr)));
     }
 
     void addTrade(const Trade& t)
@@ -128,31 +128,25 @@ public:
     std::vector<Trade> loadTrades() const
     {
         std::vector<Trade> out;
-        std::ifstream f(tradesPath());
-        if (!f) return out;
-
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(tradesPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             Trade t;
-
-            std::getline(ss, t.symbol, ',');
-            std::getline(ss, tok, ','); t.tradeId       = std::stoi(tok);
-            std::getline(ss, tok, ','); t.type           = static_cast<TradeType>(std::stoi(tok));
-            std::getline(ss, tok, ','); t.value          = std::stod(tok);
-            std::getline(ss, tok, ','); t.quantity       = std::stod(tok);
-            std::getline(ss, tok, ','); t.parentTradeId  = std::stoi(tok);
-            std::getline(ss, tok, ','); t.takeProfit     = std::stod(tok);
-            std::getline(ss, tok, ','); t.stopLoss       = std::stod(tok);
-            std::getline(ss, tok, ','); t.stopLossActive = (std::stoi(tok) != 0);
-            std::getline(ss, tok, ','); t.shortEnabled   = (std::stoi(tok) != 0);
-            if (std::getline(ss, tok, ',') && !tok.empty()) { try { t.buyFee  = std::stod(tok); } catch (...) {} }
-            if (std::getline(ss, tok, ',') && !tok.empty()) { try { t.sellFee = std::stod(tok); } catch (...) {} }
-            if (std::getline(ss, tok, ',') && !tok.empty()) { try { t.timestamp = std::stoll(tok); } catch (...) {} }
-
+            t.symbol        = gs(item, "symbol");
+            t.tradeId       = gi(item, "tradeId");
+            t.type          = static_cast<TradeType>(gi(item, "type"));
+            t.value         = gd(item, "value");
+            t.quantity      = gd(item, "quantity");
+            t.parentTradeId = gi(item, "parentTradeId");
+            t.takeProfit    = gd(item, "takeProfit");
+            t.stopLoss      = gd(item, "stopLoss");
+            t.stopLossActive = gb(item, "stopLossActive");
+            t.shortEnabled  = gb(item, "shortEnabled");
+            t.buyFee        = gd(item, "buyFee");
+            t.sellFee       = gd(item, "sellFee");
+            t.timestamp     = gll(item, "timestamp");
             out.push_back(t);
         }
         return out;
@@ -227,17 +221,18 @@ public:
     void saveProfitSnapshot(const std::string& symbol, int tradeId,
                             double currentPrice, const ProfitResult& r)
     {
-        std::ofstream f(profitsPath(), std::ios::app);
-        if (!f) throw std::runtime_error("Cannot open " + profitsPath());
-
-        f << symbol       << ','
-          << tradeId      << ','
-          << std::fixed << std::setprecision(17)
-          << currentPrice << ','
-          << r.grossProfit << ','
-          << r.netProfit   << ','
-          << r.roi
-          << '\n';
+        auto j = readJsonArr(profitsPath());
+        auto* a = j.as_array();
+        if (!a) { j = njs3::json(njs3::js_array{}); a = j.as_array(); }
+        njs3::json row(njs3::js_object{});
+        row["symbol"] = JStr(symbol);
+        row["tradeId"] = JI(tradeId);
+        row["currentPrice"] = JD(currentPrice);
+        row["grossProfit"] = JD(r.grossProfit);
+        row["netProfit"] = JD(r.netProfit);
+        row["roi"] = JD(r.roi);
+        a->push_back(std::move(row));
+        writeJson(profitsPath(), j);
     }
 
     struct ProfitRow
@@ -253,22 +248,18 @@ public:
     std::vector<ProfitRow> loadProfitHistory() const
     {
         std::vector<ProfitRow> out;
-        std::ifstream f(profitsPath());
-        if (!f) return out;
-
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(profitsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             ProfitRow r;
-            std::getline(ss, r.symbol, ',');
-            std::getline(ss, tok, ','); r.tradeId      = std::stoi(tok);
-            std::getline(ss, tok, ','); r.currentPrice = std::stod(tok);
-            std::getline(ss, tok, ','); r.grossProfit  = std::stod(tok);
-            std::getline(ss, tok, ','); r.netProfit    = std::stod(tok);
-            std::getline(ss, tok, ','); r.roi          = std::stod(tok);
+            r.symbol       = gs(item, "symbol");
+            r.tradeId      = gi(item, "tradeId");
+            r.currentPrice = gd(item, "currentPrice");
+            r.grossProfit  = gd(item, "grossProfit");
+            r.netProfit    = gd(item, "netProfit");
+            r.roi          = gd(item, "roi");
             out.push_back(r);
         }
         return out;
@@ -346,68 +337,61 @@ public:
 
     void saveParamsSnapshot(const ParamsRow& r)
     {
-        std::ofstream f(paramsPath(), std::ios::app);
-        if (!f) throw std::runtime_error("Cannot open " + paramsPath());
-
-        f << r.calcType     << ','
-          << r.symbol       << ','
-          << r.tradeId      << ','
-          << std::fixed << std::setprecision(17)
-          << r.currentPrice << ','
-          << r.quantity     << ','
-          << r.buyFees      << ','
-          << r.sellFees     << ','
-          << r.feeHedgingCoefficient << ','
-          << r.portfolioPump << ','
-          << r.symbolCount  << ','
-          << r.coefficientK << ','
-          << r.feeSpread    << ','
-          << r.deltaTime    << ','
-          << r.surplusRate  << ','
-          << r.horizonCount << ','
-          << r.generateStopLosses << ','
-          << r.riskCoefficient << ','
-          << r.maxRisk << ','
-          << r.minRisk
-          << '\n';
+        auto j = readJsonArr(paramsPath());
+        auto* a = j.as_array();
+        if (!a) { j = njs3::json(njs3::js_array{}); a = j.as_array(); }
+        njs3::json row(njs3::js_object{});
+        row["calcType"] = JStr(r.calcType);
+        row["symbol"] = JStr(r.symbol);
+        row["tradeId"] = JI(r.tradeId);
+        row["currentPrice"] = JD(r.currentPrice);
+        row["quantity"] = JD(r.quantity);
+        row["buyFees"] = JD(r.buyFees);
+        row["sellFees"] = JD(r.sellFees);
+        row["feeHedgingCoefficient"] = JD(r.feeHedgingCoefficient);
+        row["portfolioPump"] = JD(r.portfolioPump);
+        row["symbolCount"] = JI(r.symbolCount);
+        row["coefficientK"] = JD(r.coefficientK);
+        row["feeSpread"] = JD(r.feeSpread);
+        row["deltaTime"] = JD(r.deltaTime);
+        row["surplusRate"] = JD(r.surplusRate);
+        row["horizonCount"] = JI(r.horizonCount);
+        row["generateStopLosses"] = JB(r.generateStopLosses);
+        row["riskCoefficient"] = JD(r.riskCoefficient);
+        row["maxRisk"] = JD(r.maxRisk);
+        row["minRisk"] = JD(r.minRisk);
+        a->push_back(std::move(row));
+        writeJson(paramsPath(), j);
     }
 
     std::vector<ParamsRow> loadParamsHistory() const
     {
         std::vector<ParamsRow> out;
-        std::ifstream f(paramsPath());
-        if (!f) return out;
-
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(paramsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             ParamsRow r;
-
-            std::getline(ss, r.calcType, ',');
-            std::getline(ss, r.symbol, ',');
-            std::getline(ss, tok, ','); r.tradeId                    = std::stoi(tok);
-            std::getline(ss, tok, ','); r.currentPrice               = std::stod(tok);
-            std::getline(ss, tok, ','); r.quantity                   = std::stod(tok);
-            std::getline(ss, tok, ','); r.buyFees                    = std::stod(tok);
-            std::getline(ss, tok, ','); r.sellFees                   = std::stod(tok);
-            std::getline(ss, tok, ','); r.feeHedgingCoefficient      = std::stod(tok);
-            std::getline(ss, tok, ','); r.portfolioPump              = std::stod(tok);
-            std::getline(ss, tok, ','); r.symbolCount                = std::stoi(tok);
-            std::getline(ss, tok, ','); r.coefficientK               = std::stod(tok);
-            std::getline(ss, tok, ','); r.feeSpread                  = std::stod(tok);
-            std::getline(ss, tok, ','); r.deltaTime                  = std::stod(tok);
-            std::getline(ss, tok, ','); r.surplusRate                = std::stod(tok);
-            std::getline(ss, tok, ','); r.horizonCount               = std::stoi(tok);
-            std::getline(ss, tok, ','); r.generateStopLosses         = (std::stoi(tok) != 0);
-            std::getline(ss, tok, ','); r.riskCoefficient            = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty())
-                r.maxRisk = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty())
-                r.minRisk = std::stod(tok);
-
+            r.calcType              = gs(item, "calcType");
+            r.symbol                = gs(item, "symbol");
+            r.tradeId               = gi(item, "tradeId");
+            r.currentPrice          = gd(item, "currentPrice");
+            r.quantity              = gd(item, "quantity");
+            r.buyFees               = gd(item, "buyFees");
+            r.sellFees              = gd(item, "sellFees");
+            r.feeHedgingCoefficient = gd(item, "feeHedgingCoefficient");
+            r.portfolioPump         = gd(item, "portfolioPump");
+            r.symbolCount           = gi(item, "symbolCount");
+            r.coefficientK          = gd(item, "coefficientK");
+            r.feeSpread             = gd(item, "feeSpread");
+            r.deltaTime             = gd(item, "deltaTime");
+            r.surplusRate           = gd(item, "surplusRate");
+            r.horizonCount          = gi(item, "horizonCount");
+            r.generateStopLosses    = gb(item, "generateStopLosses");
+            r.riskCoefficient       = gd(item, "riskCoefficient");
+            r.maxRisk               = gd(item, "maxRisk");
+            r.minRisk               = gd(item, "minRisk");
             out.push_back(r);
         }
         return out;
@@ -427,38 +411,36 @@ public:
 
     void savePendingExits(const std::vector<PendingExit>& orders)
     {
-        std::ofstream f(pendingExitsPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + pendingExitsPath());
+        njs3::js_array arr;
         for (const auto& o : orders)
         {
-            f << o.symbol      << ','
-              << o.orderId     << ','
-              << o.tradeId     << ','
-              << std::fixed << std::setprecision(17)
-              << o.triggerPrice << ','
-              << o.sellQty     << ','
-              << o.levelIndex  << '\n';
+            njs3::json j(njs3::js_object{});
+            j["symbol"] = JStr(o.symbol);
+            j["orderId"] = JI(o.orderId);
+            j["tradeId"] = JI(o.tradeId);
+            j["triggerPrice"] = JD(o.triggerPrice);
+            j["sellQty"] = JD(o.sellQty);
+            j["levelIndex"] = JI(o.levelIndex);
+            arr.push_back(std::move(j));
         }
+        writeJson(pendingExitsPath(), njs3::json(std::move(arr)));
     }
 
     std::vector<PendingExit> loadPendingExits() const
     {
         std::vector<PendingExit> out;
-        std::ifstream f(pendingExitsPath());
-        if (!f) return out;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(pendingExitsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             PendingExit o;
-            std::getline(ss, o.symbol, ',');
-            std::getline(ss, tok, ','); o.orderId      = std::stoi(tok);
-            std::getline(ss, tok, ','); o.tradeId      = std::stoi(tok);
-            std::getline(ss, tok, ','); o.triggerPrice  = std::stod(tok);
-            std::getline(ss, tok, ','); o.sellQty       = std::stod(tok);
-            std::getline(ss, tok, ','); o.levelIndex    = std::stoi(tok);
+            o.symbol       = gs(item, "symbol");
+            o.orderId      = gi(item, "orderId");
+            o.tradeId      = gi(item, "tradeId");
+            o.triggerPrice = gd(item, "triggerPrice");
+            o.sellQty      = gd(item, "sellQty");
+            o.levelIndex   = gi(item, "levelIndex");
             out.push_back(o);
         }
         return out;
@@ -513,55 +495,52 @@ public:
 
     void saveEntryPoints(const std::vector<EntryPoint>& points)
     {
-        std::ofstream f(entryPointsPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + entryPointsPath());
+        njs3::js_array arr;
         for (const auto& ep : points)
         {
-            f << ep.symbol             << ','
-              << ep.entryId            << ','
-              << ep.levelIndex         << ','
-              << std::fixed << std::setprecision(17)
-              << ep.entryPrice         << ','
-              << ep.breakEven          << ','
-              << ep.funding            << ','
-              << ep.fundingQty         << ','
-              << ep.effectiveOverhead  << ','
-              << ep.isShort            << ','
-              << ep.traded             << ','
-              << ep.linkedTradeId      << ','
-              << ep.exitTakeProfit     << ','
-              << ep.exitStopLoss       << ','
-              << ep.stopLossActive
-              << '\n';
+            njs3::json j(njs3::js_object{});
+            j["symbol"] = JStr(ep.symbol);
+            j["entryId"] = JI(ep.entryId);
+            j["levelIndex"] = JI(ep.levelIndex);
+            j["entryPrice"] = JD(ep.entryPrice);
+            j["breakEven"] = JD(ep.breakEven);
+            j["funding"] = JD(ep.funding);
+            j["fundingQty"] = JD(ep.fundingQty);
+            j["effectiveOverhead"] = JD(ep.effectiveOverhead);
+            j["isShort"] = JB(ep.isShort);
+            j["traded"] = JB(ep.traded);
+            j["linkedTradeId"] = JI(ep.linkedTradeId);
+            j["exitTakeProfit"] = JD(ep.exitTakeProfit);
+            j["exitStopLoss"] = JD(ep.exitStopLoss);
+            j["stopLossActive"] = JB(ep.stopLossActive);
+            arr.push_back(std::move(j));
         }
+        writeJson(entryPointsPath(), njs3::json(std::move(arr)));
     }
 
     std::vector<EntryPoint> loadEntryPoints() const
     {
         std::vector<EntryPoint> out;
-        std::ifstream f(entryPointsPath());
-        if (!f) return out;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(entryPointsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             EntryPoint ep;
-            std::getline(ss, ep.symbol, ',');
-            std::getline(ss, tok, ','); ep.entryId           = std::stoi(tok);
-            std::getline(ss, tok, ','); ep.levelIndex        = std::stoi(tok);
-            std::getline(ss, tok, ','); ep.entryPrice        = std::stod(tok);
-            std::getline(ss, tok, ','); ep.breakEven         = std::stod(tok);
-            std::getline(ss, tok, ','); ep.funding           = std::stod(tok);
-            std::getline(ss, tok, ','); ep.fundingQty        = std::stod(tok);
-            std::getline(ss, tok, ','); ep.effectiveOverhead = std::stod(tok);
-            std::getline(ss, tok, ','); ep.isShort           = (std::stoi(tok) != 0);
-            std::getline(ss, tok, ','); ep.traded            = (std::stoi(tok) != 0);
-            std::getline(ss, tok, ','); ep.linkedTradeId     = std::stoi(tok);
-            std::getline(ss, tok, ','); ep.exitTakeProfit    = std::stod(tok);
-            std::getline(ss, tok, ','); ep.exitStopLoss      = std::stod(tok);
-            std::getline(ss, tok, ','); ep.stopLossActive    = (std::stoi(tok) != 0);
+            ep.symbol            = gs(item, "symbol");
+            ep.entryId           = gi(item, "entryId");
+            ep.levelIndex        = gi(item, "levelIndex");
+            ep.entryPrice        = gd(item, "entryPrice");
+            ep.breakEven         = gd(item, "breakEven");
+            ep.funding           = gd(item, "funding");
+            ep.fundingQty        = gd(item, "fundingQty");
+            ep.effectiveOverhead = gd(item, "effectiveOverhead");
+            ep.isShort           = gb(item, "isShort");
+            ep.traded            = gb(item, "traded");
+            ep.linkedTradeId     = gi(item, "linkedTradeId");
+            ep.exitTakeProfit    = gd(item, "exitTakeProfit");
+            ep.exitStopLoss      = gd(item, "exitStopLoss");
+            ep.stopLossActive    = gb(item, "stopLossActive");
             out.push_back(ep);
         }
         return out;
@@ -583,18 +562,15 @@ public:
 
     double loadWalletBalance() const
     {
-        std::ifstream f(walletPath());
-        if (!f) return 0.0;
-        double bal = 0.0;
-        f >> bal;
-        return bal;
+        auto j = readJsonObj(walletPath());
+        return static_cast<double>(j["balance"]->get_number_or(0.0L));
     }
 
     void saveWalletBalance(double balance)
     {
-        std::ofstream f(walletPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + walletPath());
-        f << std::fixed << std::setprecision(17) << balance << '\n';
+        njs3::json j(njs3::js_object{});
+        j["balance"] = JD(balance);
+        writeJson(walletPath(), j);
     }
 
     void deposit(double amount)
@@ -628,20 +604,13 @@ public:
     double releasedForTrade(int tradeId) const
     {
         double total = 0.0;
-        std::ifstream f(releasedPath());
-        if (!f) return 0.0;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(releasedPath());
+        const auto* a = j.as_array();
+        if (!a) return 0.0;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
-            int tid = 0;
-            double qty = 0;
-            std::getline(ss, tok, ',');
-            std::getline(ss, tok, ','); try { tid = std::stoi(tok); } catch (...) { continue; }
-            std::getline(ss, tok, ','); try { qty = std::stod(tok); } catch (...) { continue; }
-            if (tid == tradeId) total += qty;
+            if (gi(item, "tradeId") == tradeId)
+                total += gd(item, "qty");
         }
         return total;
     }
@@ -658,10 +627,15 @@ public:
         if (qty > allocated + 1e-9) return false;
         if (qty > allocated) qty = allocated;
 
-        std::ofstream f(releasedPath(), std::ios::app);
-        if (!f) return false;
-        f << t->symbol << ',' << tradeId << ','
-          << std::fixed << std::setprecision(17) << qty << '\n';
+        auto j = readJsonArr(releasedPath());
+        auto* a = j.as_array();
+        if (!a) { j = njs3::json(njs3::js_array{}); a = j.as_array(); }
+        njs3::json row(njs3::js_object{});
+        row["symbol"] = JStr(t->symbol);
+        row["tradeId"] = JI(tradeId);
+        row["qty"] = JD(qty);
+        a->push_back(std::move(row));
+        writeJson(releasedPath(), j);
         return true;
     }
 
@@ -1058,69 +1032,66 @@ tr:nth-child(even){background:#0f1b2d}
 
     void saveParamModels(const std::vector<ParamModel>& models)
     {
-        std::ofstream f(paramModelsPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + paramModelsPath());
+        njs3::js_array arr;
         for (const auto& m : models)
         {
-            f << m.name << ','
-              << m.levels << ','
-              << std::fixed << std::setprecision(17)
-              << m.risk << ','
-              << m.steepness << ','
-              << m.feeHedgingCoefficient << ','
-              << m.portfolioPump << ','
-              << m.symbolCount << ','
-              << m.coefficientK << ','
-              << m.feeSpread << ','
-              << m.deltaTime << ','
-              << m.surplusRate << ','
-              << m.maxRisk << ','
-              << m.minRisk << ','
-              << m.isShort << ','
-              << m.fundMode << ','
-              << m.generateStopLosses << ','
-              << m.rangeAbove << ','
-              << m.rangeBelow << ','
-              << m.futureTradeCount << ','
-              << m.stopLossFraction << ','
-              << m.stopLossHedgeCount
-              << '\n';
+            njs3::json j(njs3::js_object{});
+            j["name"] = JStr(m.name);
+            j["levels"] = JI(m.levels);
+            j["risk"] = JD(m.risk);
+            j["steepness"] = JD(m.steepness);
+            j["feeHedgingCoefficient"] = JD(m.feeHedgingCoefficient);
+            j["portfolioPump"] = JD(m.portfolioPump);
+            j["symbolCount"] = JI(m.symbolCount);
+            j["coefficientK"] = JD(m.coefficientK);
+            j["feeSpread"] = JD(m.feeSpread);
+            j["deltaTime"] = JD(m.deltaTime);
+            j["surplusRate"] = JD(m.surplusRate);
+            j["maxRisk"] = JD(m.maxRisk);
+            j["minRisk"] = JD(m.minRisk);
+            j["isShort"] = JB(m.isShort);
+            j["fundMode"] = JI(m.fundMode);
+            j["generateStopLosses"] = JB(m.generateStopLosses);
+            j["rangeAbove"] = JD(m.rangeAbove);
+            j["rangeBelow"] = JD(m.rangeBelow);
+            j["futureTradeCount"] = JI(m.futureTradeCount);
+            j["stopLossFraction"] = JD(m.stopLossFraction);
+            j["stopLossHedgeCount"] = JI(m.stopLossHedgeCount);
+            arr.push_back(std::move(j));
         }
+        writeJson(paramModelsPath(), njs3::json(std::move(arr)));
     }
 
     std::vector<ParamModel> loadParamModels() const
     {
         std::vector<ParamModel> out;
-        std::ifstream f(paramModelsPath());
-        if (!f) return out;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(paramModelsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             ParamModel m;
-            std::getline(ss, m.name, ',');
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.levels               = std::stoi(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.risk                 = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.steepness            = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.feeHedgingCoefficient = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.portfolioPump        = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.symbolCount          = std::stoi(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.coefficientK         = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.feeSpread            = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.deltaTime            = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.surplusRate          = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.maxRisk              = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.minRisk              = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.isShort              = (std::stoi(tok) != 0);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.fundMode             = std::stoi(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.generateStopLosses   = (std::stoi(tok) != 0);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.rangeAbove           = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.rangeBelow           = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.futureTradeCount     = std::stoi(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.stopLossFraction     = std::stod(tok);
-            if (std::getline(ss, tok, ',') && !tok.empty()) m.stopLossHedgeCount   = std::stoi(tok);
+            m.name                  = gs(item, "name");
+            m.levels                = gi(item, "levels");
+            m.risk                  = gd(item, "risk");
+            m.steepness             = gd(item, "steepness");
+            m.feeHedgingCoefficient = gd(item, "feeHedgingCoefficient");
+            m.portfolioPump         = gd(item, "portfolioPump");
+            m.symbolCount           = gi(item, "symbolCount");
+            m.coefficientK          = gd(item, "coefficientK");
+            m.feeSpread             = gd(item, "feeSpread");
+            m.deltaTime             = gd(item, "deltaTime");
+            m.surplusRate           = gd(item, "surplusRate");
+            m.maxRisk               = gd(item, "maxRisk");
+            m.minRisk               = gd(item, "minRisk");
+            m.isShort               = gb(item, "isShort");
+            m.fundMode              = gi(item, "fundMode");
+            m.generateStopLosses    = gb(item, "generateStopLosses");
+            m.rangeAbove            = gd(item, "rangeAbove");
+            m.rangeBelow            = gd(item, "rangeBelow");
+            m.futureTradeCount      = gi(item, "futureTradeCount");
+            m.stopLossFraction      = gd(item, "stopLossFraction");
+            m.stopLossHedgeCount    = gi(item, "stopLossHedgeCount");
             out.push_back(m);
         }
         return out;
@@ -1170,7 +1141,6 @@ tr:nth-child(even){background:#0f1b2d}
                    double entryPrice, double sellPrice, double qty,
                    double grossProfit, double netProfit)
     {
-        // load existing to compute cumulative
         auto history = loadPnl();
         double cum = history.empty() ? 0.0 : history.back().cumProfit;
         cum += netProfit;
@@ -1179,46 +1149,44 @@ tr:nth-child(even){background:#0f1b2d}
         long long ts = std::chrono::duration_cast<std::chrono::seconds>(
             now.time_since_epoch()).count();
 
-        std::ofstream f(pnlPath(), std::ios::app);
-        if (!f) return;
-        f << std::fixed << std::setprecision(17)
-          << ts << ','
-          << symbol << ','
-          << sellId << ','
-          << parentId << ','
-          << entryPrice << ','
-          << sellPrice << ','
-          << qty << ','
-          << grossProfit << ','
-          << netProfit << ','
-          << cum << '\n';
+        auto j = readJsonArr(pnlPath());
+        auto* a = j.as_array();
+        if (!a) { j = njs3::json(njs3::js_array{}); a = j.as_array(); }
+        njs3::json row(njs3::js_object{});
+        row["timestamp"] = JLL(ts);
+        row["symbol"] = JStr(symbol);
+        row["sellTradeId"] = JI(sellId);
+        row["parentTradeId"] = JI(parentId);
+        row["entryPrice"] = JD(entryPrice);
+        row["sellPrice"] = JD(sellPrice);
+        row["quantity"] = JD(qty);
+        row["grossProfit"] = JD(grossProfit);
+        row["netProfit"] = JD(netProfit);
+        row["cumProfit"] = JD(cum);
+        a->push_back(std::move(row));
+        writeJson(pnlPath(), j);
     }
 
     std::vector<PnlEntry> loadPnl() const
     {
         std::vector<PnlEntry> out;
-        std::ifstream f(pnlPath());
-        if (!f) return out;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(pnlPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             PnlEntry e;
-            try {
-                std::getline(ss, tok, ','); e.timestamp     = std::stoll(tok);
-                std::getline(ss, e.symbol, ',');
-                std::getline(ss, tok, ','); e.sellTradeId   = std::stoi(tok);
-                std::getline(ss, tok, ','); e.parentTradeId = std::stoi(tok);
-                std::getline(ss, tok, ','); e.entryPrice    = std::stod(tok);
-                std::getline(ss, tok, ','); e.sellPrice     = std::stod(tok);
-                std::getline(ss, tok, ','); e.quantity       = std::stod(tok);
-                std::getline(ss, tok, ','); e.grossProfit   = std::stod(tok);
-                std::getline(ss, tok, ','); e.netProfit     = std::stod(tok);
-                std::getline(ss, tok, ','); e.cumProfit     = std::stod(tok);
-                out.push_back(e);
-            } catch (...) {}
+            e.timestamp     = gll(item, "timestamp");
+            e.symbol        = gs(item, "symbol");
+            e.sellTradeId   = gi(item, "sellTradeId");
+            e.parentTradeId = gi(item, "parentTradeId");
+            e.entryPrice    = gd(item, "entryPrice");
+            e.sellPrice     = gd(item, "sellPrice");
+            e.quantity      = gd(item, "quantity");
+            e.grossProfit   = gd(item, "grossProfit");
+            e.netProfit     = gd(item, "netProfit");
+            e.cumProfit     = gd(item, "cumProfit");
+            out.push_back(e);
         }
         return out;
     }
@@ -1242,55 +1210,52 @@ tr:nth-child(even){background:#0f1b2d}
 
     void saveChainState(const ChainState& state)
     {
-        std::ofstream f(chainStatePath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + chainStatePath());
-        f << state.symbol << ','
-          << state.currentCycle << ','
-          << std::fixed << std::setprecision(17)
-          << state.totalSavings << ','
-          << state.savingsRate << ','
-          << state.active << '\n';
+        njs3::json j(njs3::js_object{});
+        j["symbol"] = JStr(state.symbol);
+        j["currentCycle"] = JI(state.currentCycle);
+        j["totalSavings"] = JD(state.totalSavings);
+        j["savingsRate"] = JD(state.savingsRate);
+        j["active"] = JB(state.active);
+        writeJson(chainStatePath(), j);
     }
 
     ChainState loadChainState() const
     {
         ChainState state;
-        std::ifstream f(chainStatePath());
-        if (!f) return state;
-        std::string line;
-        if (!std::getline(f, line) || line.empty()) return state;
-        std::istringstream ss(line);
-        std::string tok;
-        std::getline(ss, state.symbol, ',');
-        std::getline(ss, tok, ','); state.currentCycle = std::stoi(tok);
-        std::getline(ss, tok, ','); state.totalSavings = std::stod(tok);
-        std::getline(ss, tok, ','); state.savingsRate  = std::stod(tok);
-        std::getline(ss, tok, ','); state.active       = (std::stoi(tok) != 0);
+        auto j = readJsonObj(chainStatePath());
+        if (!j->is_object()) return state;
+        state.symbol       = gs(j, "symbol");
+        state.currentCycle = gi(j, "currentCycle");
+        state.totalSavings = gd(j, "totalSavings");
+        state.savingsRate  = gd(j, "savingsRate");
+        state.active       = gb(j, "active");
         return state;
     }
 
     void saveChainMembers(const std::vector<ChainMember>& members)
     {
-        std::ofstream f(chainMembersPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + chainMembersPath());
+        njs3::js_array arr;
         for (const auto& m : members)
-            f << m.cycle << ',' << m.entryId << '\n';
+        {
+            njs3::json j(njs3::js_object{});
+            j["cycle"] = JI(m.cycle);
+            j["entryId"] = JI(m.entryId);
+            arr.push_back(std::move(j));
+        }
+        writeJson(chainMembersPath(), njs3::json(std::move(arr)));
     }
 
     std::vector<ChainMember> loadChainMembers() const
     {
         std::vector<ChainMember> out;
-        std::ifstream f(chainMembersPath());
-        if (!f) return out;
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(chainMembersPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok;
             ChainMember m;
-            std::getline(ss, tok, ','); m.cycle   = std::stoi(tok);
-            std::getline(ss, tok, ','); m.entryId = std::stoi(tok);
+            m.cycle   = gi(item, "cycle");
+            m.entryId = gi(item, "entryId");
             out.push_back(m);
         }
         return out;
@@ -1311,6 +1276,7 @@ tr:nth-child(even){background:#0f1b2d}
 
     void clearAll()
     {
+        // Remove JSON files
         std::filesystem::remove(tradesPath());
         std::filesystem::remove(horizonsPath());
         std::filesystem::remove(profitsPath());
@@ -1323,6 +1289,14 @@ tr:nth-child(even){background:#0f1b2d}
         std::filesystem::remove(pnlPath());
         std::filesystem::remove(chainStatePath());
         std::filesystem::remove(chainMembersPath());
+        // Also remove legacy CSV files if present
+        for (const char* ext : {".csv"})
+        {
+            for (const char* name : {"trades", "horizons", "profits", "params",
+                "wallet", "pending_exits", "entry_points", "released",
+                "param_models", "pnl", "chain_state", "chain_members"})
+                std::filesystem::remove(m_dir + "/" + name + ext);
+        }
         seedIdGenerators();
     }
 
@@ -1332,64 +1306,93 @@ IdGenerator  m_tradeIdGen;
 IdGenerator  m_pendingIdGen;
 IdGenerator  m_entryIdGen;
 
-    std::string tradesPath()   const { return m_dir + "/trades.csv"; }
-    std::string horizonsPath() const { return m_dir + "/horizons.csv"; }
-    std::string profitsPath()  const { return m_dir + "/profits.csv"; }
-    std::string paramsPath()   const { return m_dir + "/params.csv"; }
-    std::string walletPath()   const { return m_dir + "/wallet.csv"; }
-    std::string pendingExitsPath() const { return m_dir + "/pending_exits.csv"; }
-    std::string entryPointsPath()  const { return m_dir + "/entry_points.csv"; }
-    std::string releasedPath()     const { return m_dir + "/released.csv"; }
-    std::string paramModelsPath()  const { return m_dir + "/param_models.csv"; }
-    std::string pnlPath()          const { return m_dir + "/pnl.csv"; }
-    std::string chainStatePath()   const { return m_dir + "/chain_state.csv"; }
-    std::string chainMembersPath() const { return m_dir + "/chain_members.csv"; }
+    std::string tradesPath()       const { return m_dir + "/trades.json"; }
+    std::string horizonsPath()     const { return m_dir + "/horizons.json"; }
+    std::string profitsPath()      const { return m_dir + "/profits.json"; }
+    std::string paramsPath()       const { return m_dir + "/params.json"; }
+    std::string walletPath()       const { return m_dir + "/wallet.json"; }
+    std::string pendingExitsPath() const { return m_dir + "/pending_exits.json"; }
+    std::string entryPointsPath()  const { return m_dir + "/entry_points.json"; }
+    std::string releasedPath()     const { return m_dir + "/released.json"; }
+    std::string paramModelsPath()  const { return m_dir + "/param_models.json"; }
+    std::string pnlPath()          const { return m_dir + "/pnl.json"; }
+    std::string chainStatePath()   const { return m_dir + "/chain_state.json"; }
+    std::string chainMembersPath() const { return m_dir + "/chain_members.json"; }
+
+    // ---- JSON I/O helpers ----
+    static njs3::json readJsonArr(const std::string& path)
+    {
+        std::ifstream f(path);
+        if (!f) return njs3::json(njs3::js_array{});
+        std::string c((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (c.empty()) return njs3::json(njs3::js_array{});
+        try { return njs3::parse_json(c); }
+        catch (...) { return njs3::json(njs3::js_array{}); }
+    }
+    static njs3::json readJsonObj(const std::string& path)
+    {
+        std::ifstream f(path);
+        if (!f) return njs3::json(njs3::js_object{});
+        std::string c((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (c.empty()) return njs3::json(njs3::js_object{});
+        try { return njs3::parse_json(c); }
+        catch (...) { return njs3::json(njs3::js_object{}); }
+    }
+    static void writeJson(const std::string& path, const njs3::json& j)
+    {
+        std::ofstream f(path, std::ios::trunc);
+        if (!f) throw std::runtime_error("Cannot open " + path);
+        f << njs3::serialize_json(j, njs3::json_serialize_option::pretty,
+            njs3::json_floating_format_options{std::chars_format::general, 17});
+    }
+    // Value constructors
+    static njs3::json JI(int v)                { return njs3::json(static_cast<njs3::js_integer>(v)); }
+    static njs3::json JD(double v)             { return njs3::json(static_cast<njs3::js_floating>(v)); }
+    static njs3::json JLL(long long v)         { return njs3::json(static_cast<njs3::js_integer>(v)); }
+    static njs3::json JB(bool v)               { return njs3::json(v); }
+    static njs3::json JStr(const std::string& v) { return njs3::json(njs3::js_string(v)); }
+    // Read helpers
+    static int         gi(const njs3::json& j, const char* k) { return static_cast<int>(j[k]->get_integer_or(0LL)); }
+    static double      gd(const njs3::json& j, const char* k) { return static_cast<double>(j[k]->get_number_or(0.0L)); }
+    static long long  gll(const njs3::json& j, const char* k) { return j[k]->get_integer_or(0LL); }
+    static bool        gb(const njs3::json& j, const char* k) { return j[k]->get_boolean_or(false); }
+    static std::string gs(const njs3::json& j, const char* k) { return j[k]->get_string_or(njs3::js_string("")); }
 
     using HorizonRow = std::tuple<std::string, int, HorizonLevel>;
 
     std::vector<HorizonRow> loadAllHorizons() const
     {
         std::vector<HorizonRow> out;
-        std::ifstream f(horizonsPath());
-        if (!f) return out;
-
-        std::string line;
-        while (std::getline(f, line))
+        auto j = readJsonArr(horizonsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
         {
-            if (line.empty()) continue;
-            std::istringstream ss(line);
-            std::string tok, sym;
-            int tid = 0;
             HorizonLevel lv;
-
-            std::getline(ss, sym, ',');
-            std::getline(ss, tok, ','); tid              = std::stoi(tok);
-            std::getline(ss, tok, ','); lv.index         = std::stoi(tok);
-            std::getline(ss, tok, ','); lv.takeProfit    = std::stod(tok);
-            std::getline(ss, tok, ','); lv.stopLoss      = std::stod(tok);
-            std::getline(ss, tok, ','); lv.stopLossActive = (std::stoi(tok) != 0);
-
-            out.emplace_back(sym, tid, lv);
+            lv.index         = gi(item, "index");
+            lv.takeProfit    = gd(item, "takeProfit");
+            lv.stopLoss      = gd(item, "stopLoss");
+            lv.stopLossActive = gb(item, "stopLossActive");
+            out.emplace_back(gs(item, "symbol"), gi(item, "tradeId"), lv);
         }
         return out;
     }
 
     void saveAllHorizons(const std::vector<HorizonRow>& rows)
     {
-        std::ofstream f(horizonsPath(), std::ios::trunc);
-        if (!f) throw std::runtime_error("Cannot open " + horizonsPath());
-
+        njs3::js_array arr;
         for (const auto& [sym, tid, lv] : rows)
         {
-            f << sym            << ','
-              << tid            << ','
-              << lv.index       << ','
-              << std::fixed << std::setprecision(17)
-              << lv.takeProfit  << ','
-              << lv.stopLoss    << ','
-              << lv.stopLossActive
-              << '\n';
+            njs3::json j(njs3::js_object{});
+            j["symbol"] = JStr(sym);
+            j["tradeId"] = JI(tid);
+            j["index"] = JI(lv.index);
+            j["takeProfit"] = JD(lv.takeProfit);
+            j["stopLoss"] = JD(lv.stopLoss);
+            j["stopLossActive"] = JB(lv.stopLossActive);
+            arr.push_back(std::move(j));
         }
+        writeJson(horizonsPath(), njs3::json(std::move(arr)));
     }
 };
 
