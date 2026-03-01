@@ -2,6 +2,8 @@
 
 #include "AppContext.h"
 #include "HtmlHelpers.h"
+#include "ExitStrategyCalculator.h"
+#include "MarketEntryCalculator.h"
 #include <mutex>
 #include <algorithm>
 #include <chrono>
@@ -72,7 +74,7 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
         h << "<br><button>Check</button></form>";
         h << "<table><tr><th>ID</th><th>Symbol</th><th>Entry</th><th>Qty</th><th>Market</th><th>Gross P&amp;L</th><th>Net P&amp;L</th><th>ROI%</th>"
              "<th>TP Price</th><th>TP?</th><th>SL Price</th><th>SL?</th></tr>";
-        struct Trigger { int id; std::string sym; double price; double qty; std::string tag; };
+        struct Trigger { int id; std::string sym; double price; double qty; std::string tag; double entryPrice; double buyFee; double totalQty; };
         std::vector<Trigger> triggers;
         for (const auto& t : trades)
         {
@@ -112,8 +114,8 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
                 else h << "-";
                 h << "</td></tr>";
             }
-            if (tpHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.takeProfitFraction, "TP"});
-            if (slHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.stopLossFraction, "SL"});
+            if (tpHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.takeProfitFraction, "TP", t.value, t.buyFee, t.quantity});
+            if (slHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.stopLossFraction, "SL", t.value, t.buyFee, t.quantity});
         }
         h << "</table>";
         auto pending = db.loadPendingExits();
@@ -135,6 +137,131 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
                 h << "<tr><td class='" << (tr.tag == "TP" ? "buy" : "sell") << "'>" << tr.tag << "</td>"
                   << "<td>" << tr.id << "</td><td>" << html::esc(tr.sym) << "</td><td>" << tr.qty << "</td><td>" << tr.price << "</td></tr>";
             h << "</table>";
+
+            // Look up last-used params for exit/entry calculation
+            HorizonParams trigParams;
+            trigParams.horizonCount = 4;
+            trigParams.feeHedgingCoefficient = 1.0;
+            trigParams.symbolCount = 1;
+            trigParams.deltaTime = 1.0;
+            trigParams.surplusRate = 0.02;
+            double trigRisk = 0.5;
+            double trigSteepness = 4.0;
+            {
+                auto paramHistory = db.loadParamsHistory();
+                if (!paramHistory.empty())
+                {
+                    const auto& last = paramHistory.back();
+                    trigParams = last.toHorizonParams();
+                    trigRisk = last.riskCoefficient;
+                }
+                auto models = db.loadParamModels();
+                if (!models.empty())
+                {
+                    const auto& m = models[0];
+                    trigParams.horizonCount = m.levels;
+                    trigRisk = m.risk;
+                    trigSteepness = m.steepness;
+                    trigParams.feeHedgingCoefficient = m.feeHedgingCoefficient;
+                    trigParams.symbolCount = m.symbolCount;
+                    trigParams.coefficientK = m.coefficientK;
+                    trigParams.feeSpread = m.feeSpread;
+                    trigParams.deltaTime = m.deltaTime;
+                    trigParams.surplusRate = m.surplusRate;
+                    trigParams.maxRisk = m.maxRisk;
+                    trigParams.minRisk = m.minRisk;
+                    trigParams.generateStopLosses = m.generateStopLosses;
+                }
+            }
+
+            for (const auto& tr : triggers)
+            {
+                if (tr.tag == "TP")
+                {
+                    // Exit strategy: show how to distribute the TP sell across levels
+                    Trade tempTrade;
+                    tempTrade.tradeId = tr.id;
+                    tempTrade.symbol = tr.sym;
+                    tempTrade.type = TradeType::Buy;
+                    tempTrade.value = tr.entryPrice;
+                    tempTrade.quantity = tr.qty;
+                    tempTrade.buyFee = tr.buyFee * (tr.totalQty > 0 ? tr.qty / tr.totalQty : 0.0);
+                    auto exitLevels = ExitStrategyCalculator::generate(tempTrade, trigParams, trigRisk, 1.0, trigSteepness);
+                    if (!exitLevels.empty())
+                    {
+                        h << "<h3 class='buy'>Exit Strategy for #" << tr.id << " " << html::esc(tr.sym)
+                          << " (TP sell " << tr.qty << " @ " << tr.price << ")</h3>";
+                        h << "<table><tr><th>Lvl</th><th>TP Price</th><th>Sell Qty</th>"
+                             "<th>Fraction</th><th>Gross</th><th>Net</th></tr>";
+                        for (const auto& el : exitLevels)
+                        {
+                            if (el.sellQty <= 0) continue;
+                            h << "<tr><td>" << el.index << "</td><td>" << el.tpPrice << "</td>"
+                              << "<td>" << el.sellQty << "</td><td>" << (el.sellFraction * 100) << "%</td>"
+                              << "<td class='" << (el.grossProfit >= 0 ? "buy" : "sell") << "'>" << el.grossProfit << "</td>"
+                              << "<td class='" << (el.netProfit >= 0 ? "buy" : "sell") << "'>" << el.netProfit << "</td></tr>";
+                        }
+                        h << "</table>";
+                    }
+
+                    // Re-entry: suggest buy-back levels with the proceeds
+                    double proceeds = tr.price * tr.qty;
+                    if (proceeds > 0)
+                    {
+                        HorizonParams entryParams = trigParams;
+                        entryParams.portfolioPump = proceeds;
+                        auto entryLevels = MarketEntryCalculator::generate(
+                            tr.price, tr.qty, entryParams, trigRisk, trigSteepness);
+                        if (!entryLevels.empty())
+                        {
+                            h << "<h3 class='buy'>Re-Entry Levels (proceeds " << proceeds << ")</h3>";
+                            h << "<table><tr><th>Lvl</th><th>Entry Price</th><th>Break Even</th>"
+                                 "<th>Funding</th><th>Qty</th><th>Potential Net</th></tr>";
+                            for (const auto& el : entryLevels)
+                            {
+                                if (el.funding <= 0) continue;
+                                h << "<tr><td>" << el.index << "</td><td>" << el.entryPrice << "</td>"
+                                  << "<td>" << el.breakEven << "</td><td>" << el.funding << "</td>"
+                                  << "<td>" << el.fundingQty << "</td>"
+                                  << "<td class='buy'>" << el.potentialNet << "</td></tr>";
+                            }
+                            h << "</table>";
+                        }
+                    }
+                }
+                else if (tr.tag == "SL")
+                {
+                    // SL hit: show the loss and potential re-entry at lower prices
+                    double sellProceeds = tr.price * tr.qty;
+                    double buyCost = tr.entryPrice * tr.qty;
+                    double slLoss = sellProceeds - buyCost;
+                    h << "<h3 class='sell'>SL Exit #" << tr.id << " " << html::esc(tr.sym)
+                      << " (sell " << tr.qty << " @ " << tr.price
+                      << ", loss " << slLoss << ")</h3>";
+
+                    if (sellProceeds > 0)
+                    {
+                        HorizonParams entryParams = trigParams;
+                        entryParams.portfolioPump = sellProceeds;
+                        auto entryLevels = MarketEntryCalculator::generate(
+                            tr.price, tr.qty, entryParams, trigRisk, trigSteepness);
+                        if (!entryLevels.empty())
+                        {
+                            h << "<table><tr><th>Lvl</th><th>Entry Price</th><th>Break Even</th>"
+                                 "<th>Funding</th><th>Qty</th><th>Potential Net</th></tr>";
+                            for (const auto& el : entryLevels)
+                            {
+                                if (el.funding <= 0) continue;
+                                h << "<tr><td>" << el.index << "</td><td>" << el.entryPrice << "</td>"
+                                  << "<td>" << el.breakEven << "</td><td>" << el.funding << "</td>"
+                                  << "<td>" << el.fundingQty << "</td>"
+                                  << "<td class='buy'>" << el.potentialNet << "</td></tr>";
+                            }
+                            h << "</table>";
+                        }
+                    }
+                }
+            }
         }
         {
             auto entryPts = db.loadEntryPoints();
