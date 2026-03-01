@@ -34,6 +34,7 @@ struct Trade
     // Take-profit / stop-loss (meaningful for Buy trades only)
     double takeProfit      = 0.0;
     double stopLoss        = 0.0;
+    bool   takeProfitActive = false;  // deactivated by default
     bool   stopLossActive  = false;   // deactivated by default
     bool   shortEnabled    = false;   // short trades disabled by default
 
@@ -45,11 +46,12 @@ struct Trade
     bool isChild()  const { return parentTradeId >= 0; }
     bool isParent() const { return type == TradeType::Buy && parentTradeId < 0; }
 
-    void setTakeProfit(double tp)
+    void setTakeProfit(double tp, bool active = false)
     {
         if (type != TradeType::Buy)
             throw std::logic_error("Take-profit is only supported for Buy trades");
         takeProfit = tp;
+        takeProfitActive = active;
     }
 
     void setStopLoss(double sl, bool active = false)

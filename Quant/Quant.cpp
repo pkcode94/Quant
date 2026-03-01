@@ -5,6 +5,8 @@
 #include <limits>
 #include <algorithm>
 #include <map>
+#include <fstream>
+#include <ctime>
 
 #include "Trade.h"
 #include "ProfitCalculator.h"
@@ -152,6 +154,7 @@ static void listTrades(TradeDatabase& db)
                   << "  price=" << t.value
                   << "  qty=" << t.quantity
                   << "  TP=" << t.takeProfit
+                  << (t.takeProfitActive ? " [TP ON]" : " [TP OFF]")
                   << "  SL=" << t.stopLoss
                   << (t.stopLossActive ? " [SL ON]" : " [SL OFF]");
         if (sold > 0.0)
@@ -1130,7 +1133,7 @@ static void priceCheck(TradeDatabase& db)
         std::cout << "    net=" << r.netProfit << "  ROI=" << r.roi << "%";
 
         // trade-level TP/SL
-        if (t.takeProfit > 0.0 && t.quantity > 0.0)
+        if (t.takeProfitActive && t.takeProfit > 0.0 && t.quantity > 0.0)
         {
             double tpPrice = t.takeProfit / t.quantity;
             if (cur >= tpPrice)
@@ -2127,6 +2130,483 @@ static void paramModelsMenu(TradeDatabase& db)
     }
 }
 
+// ---- Execute buy/sell (wallet-integrated) ----
+
+static void executeBuySell(TradeDatabase& db)
+{
+    std::cout << std::fixed << std::setprecision(2);
+    double walBal = db.loadWalletBalance();
+    std::cout << "  Wallet balance: " << walBal << "\n\n";
+
+    int action = readInt("  1=Buy  2=Sell  0=Back: ");
+    if (action == 1)
+    {
+        auto sym    = readSymbol("  Symbol: ");
+        double price = readDouble("  Price: ");
+        double qty   = readDouble("  Quantity: ");
+        double fee   = readDouble("  Buy fee: ");
+        double tp    = readDouble("  Take profit (per unit, 0=none): ");
+        double sl    = readDouble("  Stop loss (per unit, 0=none): ");
+
+        double cost = QuantMath::cost(price, qty) + fee;
+        if (cost > walBal)
+        {
+            std::cout << "  Insufficient funds (need " << cost << ", have " << walBal << ").\n";
+            return;
+        }
+
+        int tid = db.executeBuy(sym, price, qty, fee, tp * qty, sl * qty);
+        std::cout << "  -> Buy #" << tid << "  " << qty << " @ " << price
+                  << "  fee=" << fee << "  cost=" << cost
+                  << "  balance=" << db.loadWalletBalance() << "\n";
+    }
+    else if (action == 2)
+    {
+        auto sym     = readSymbol("  Symbol: ");
+        double price  = readDouble("  Sell price: ");
+        double qty    = readDouble("  Quantity: ");
+        double fee    = readDouble("  Sell fee: ");
+
+        double holdings = db.holdingsForSymbol(sym);
+        if (qty > holdings + 1e-9)
+        {
+            std::cout << "  Insufficient holdings (have " << holdings << ").\n";
+            return;
+        }
+
+        int sid = db.executeSell(sym, price, qty, fee);
+        if (sid >= 0)
+            std::cout << "  -> Sell #" << sid << "  " << qty << " @ " << price
+                      << "  fee=" << fee << "  balance=" << db.loadWalletBalance() << "\n";
+        else
+            std::cout << "  -> Sell failed.\n";
+    }
+}
+
+// ---- Set TP/SL directly ----
+
+static void setTpSl(TradeDatabase& db)
+{
+    listTrades(db);
+    int id = readInt("  Trade ID: ");
+
+    auto trades = db.loadTrades();
+    auto* tp = db.findTradeById(trades, id);
+    if (!tp) { std::cout << "  Trade not found.\n"; return; }
+
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "  Current: TP=" << tp->takeProfit
+              << (tp->takeProfitActive ? " [TP ON]" : " [TP OFF]")
+              << "  SL=" << tp->stopLoss
+              << (tp->stopLossActive ? " [SL ON]" : " [SL OFF]") << "\n";
+
+    int what = readInt("  1=Set TP  2=Set SL  3=Set both: ");
+    if (what == 1 || what == 3)
+    {
+        double newTp = readDouble("  New TP (total, or per-unit * qty): ");
+        tp->takeProfit = newTp;
+        int active = readInt("  TP active? (0=no, 1=yes): ");
+        tp->takeProfitActive = (active == 1);
+    }
+    if (what == 2 || what == 3)
+    {
+        double newSl = readDouble("  New SL (total, or per-unit * qty): ");
+        tp->stopLoss = newSl;
+        int active = readInt("  SL active? (0=no, 1=yes): ");
+        tp->stopLossActive = (active == 1);
+    }
+    db.updateTrade(*tp);
+    std::cout << "  -> Updated: TP=" << tp->takeProfit
+              << (tp->takeProfitActive ? " [TP ON]" : " [TP OFF]")
+              << "  SL=" << tp->stopLoss
+              << (tp->stopLossActive ? " [SL ON]" : " [SL OFF]") << "\n";
+}
+
+// ---- Deallocate holdings ----
+
+static void deallocateHoldings(TradeDatabase& db)
+{
+    auto trades = db.loadTrades();
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "  Buy trades with remaining holdings:\n";
+    bool any = false;
+    for (const auto& t : trades)
+    {
+        if (t.type != TradeType::Buy) continue;
+        double sold = db.soldQuantityForParent(t.tradeId);
+        double released = db.releasedForTrade(t.tradeId);
+        double allocated = t.quantity - sold - released;
+        if (allocated <= 0) continue;
+        any = true;
+        std::cout << "    #" << t.tradeId << "  " << t.symbol
+                  << "  total=" << t.quantity
+                  << "  sold=" << sold
+                  << "  released=" << released
+                  << "  allocated=" << allocated << "\n";
+    }
+    if (!any) { std::cout << "  (no allocated holdings)\n"; return; }
+
+    int id = readInt("  Trade ID to deallocate from: ");
+    double qty = readDouble("  Quantity to release: ");
+
+    if (db.releaseFromTrade(id, qty))
+        std::cout << "  -> Released " << qty << " from trade #" << id << ".\n";
+    else
+        std::cout << "  -> Failed (invalid trade or qty exceeds allocated).\n";
+}
+
+// ---- Chain advance ----
+
+static void chainAdvance(TradeDatabase& db)
+{
+    auto state = db.loadChainState();
+    if (!state.active)
+    {
+        std::cout << "  (no active chain)\n";
+        return;
+    }
+
+    auto members = db.loadChainMembers();
+    auto allEntries = db.loadEntryPoints();
+    auto allTrades = db.loadTrades();
+
+    bool anyTraded = false;
+    bool allSold = true;
+    double cyclePnl = 0;
+
+    for (const auto& m : members)
+    {
+        if (m.cycle != state.currentCycle) continue;
+        for (const auto& e : allEntries)
+        {
+            if (e.entryId != m.entryId) continue;
+            if (!e.traded || e.linkedTradeId < 0) continue;
+            anyTraded = true;
+            for (const auto& t : allTrades)
+            {
+                if (t.tradeId == e.linkedTradeId && t.type == TradeType::Buy)
+                {
+                    double sq = db.soldQuantityForParent(t.tradeId);
+                    if (sq < t.quantity - 1e-9) allSold = false;
+                    for (const auto& s : allTrades)
+                        if (s.type == TradeType::CoveredSell && s.parentTradeId == t.tradeId)
+                            cyclePnl += QuantMath::netProfit(
+                                QuantMath::grossProfit(t.value, s.value, s.quantity),
+                                0.0, s.sellFee);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "  Chain: " << state.symbol
+              << "  Cycle=" << state.currentCycle
+              << "  P&L this cycle=" << cyclePnl << "\n";
+
+    if (!anyTraded || !allSold)
+    {
+        std::cout << "  Cycle not complete (traded=" << anyTraded
+                  << " allSold=" << allSold << ").\n";
+        return;
+    }
+
+    // Divert savings
+    double savingsDiv = (cyclePnl > 0 && state.savingsRate > 0) ? cyclePnl * state.savingsRate : 0;
+    if (savingsDiv > 0)
+    {
+        db.withdraw(savingsDiv);
+        state.totalSavings += savingsDiv;
+        std::cout << "  Savings diverted: " << savingsDiv << "\n";
+    }
+
+    double curPrice = readDouble("  Current price for next cycle entries: ");
+    double qty      = readDouble("  Quantity: ");
+    int    levels   = readInt("  Levels: ");
+    double risk     = readDouble("  Risk (0-1): ");
+    double steepness = readDouble("  Steepness: ");
+
+    HorizonParams p = readHorizonParams(nullptr);
+
+    QuantMath::SerialParams sp;
+    sp.currentPrice          = curPrice;
+    sp.quantity              = qty;
+    sp.levels                = levels;
+    sp.steepness             = steepness;
+    sp.risk                  = risk;
+    sp.availableFunds        = db.loadWalletBalance();
+    sp.feeSpread             = p.feeSpread;
+    sp.feeHedgingCoefficient = p.feeHedgingCoefficient;
+    sp.deltaTime             = p.deltaTime;
+    sp.symbolCount           = p.symbolCount;
+    sp.coefficientK          = p.coefficientK;
+    sp.surplusRate           = p.surplusRate;
+    sp.maxRisk               = p.maxRisk;
+    sp.minRisk               = p.minRisk;
+
+    auto plan = QuantMath::generateSerialPlan(sp);
+
+    int nextCycle = state.currentCycle + 1;
+    std::vector<int> newEntryIds;
+    auto existingEps = db.loadEntryPoints();
+
+    for (const auto& e : plan.entries)
+    {
+        if (e.funding <= 0) continue;
+        TradeDatabase::EntryPoint ep;
+        ep.symbol = state.symbol;
+        ep.entryId = db.nextEntryId();
+        ep.levelIndex = e.index;
+        ep.entryPrice = e.entryPrice;
+        ep.breakEven = e.breakEven;
+        ep.funding = e.funding;
+        ep.fundingQty = e.fundQty;
+        ep.effectiveOverhead = plan.effectiveOH;
+        ep.exitTakeProfit = e.tpUnit;
+        ep.exitStopLoss = e.slUnit;
+        ep.traded = false;
+        ep.linkedTradeId = -1;
+        existingEps.push_back(ep);
+        newEntryIds.push_back(ep.entryId);
+    }
+
+    db.saveEntryPoints(existingEps);
+    db.addChainMembers(nextCycle, newEntryIds);
+    state.currentCycle = nextCycle;
+    db.saveChainState(state);
+
+    std::cout << "  -> Advanced to cycle " << nextCycle
+              << " with " << newEntryIds.size() << " new entries.\n";
+}
+
+// ---- Chain reset ----
+
+static void chainReset(TradeDatabase& db)
+{
+    auto state = db.loadChainState();
+    if (!state.active) { std::cout << "  (no active chain to reset)\n"; return; }
+
+    int c = readInt("  Reset active chain? (1=yes, 0=no): ");
+    if (c == 1)
+    {
+        TradeDatabase::ChainState empty;
+        db.saveChainState(empty);
+        db.saveChainMembers({});
+        std::cout << "  -> Chain reset.\n";
+    }
+}
+
+// ---- P&L backfill ----
+
+static void pnlBackfill(TradeDatabase& db)
+{
+    auto trades = db.loadTrades();
+    int filled = 0;
+    for (const auto& t : trades)
+    {
+        if (t.type != TradeType::CoveredSell || t.parentTradeId < 0) continue;
+        const Trade* parent = nullptr;
+        for (const auto& p : trades)
+            if (p.tradeId == t.parentTradeId) { parent = &p; break; }
+        if (!parent) continue;
+        double gp = (t.value - parent->value) * t.quantity;
+        double np = gp - t.sellFee;
+        db.recordPnl(t.symbol, t.tradeId, t.parentTradeId,
+                     parent->value, t.value, t.quantity, gp, np);
+        ++filled;
+    }
+    std::cout << "  -> Backfilled " << filled << " P&L entries.\n";
+}
+
+// ---- Execute triggered entries ----
+
+static void executeTriggeredEntries(TradeDatabase& db)
+{
+    auto points = db.loadEntryPoints();
+    std::cout << std::fixed << std::setprecision(2);
+
+    // group by symbol to ask prices
+    std::map<std::string, double> symPrices;
+    for (const auto& ep : points)
+    {
+        if (ep.traded) continue;
+        if (symPrices.find(ep.symbol) == symPrices.end())
+            symPrices[ep.symbol] = readDouble(("  Current price for " + ep.symbol + ": ").c_str());
+    }
+
+    // find triggered entries
+    std::vector<TradeDatabase::EntryPoint*> triggered;
+    for (auto& ep : points)
+    {
+        if (ep.traded) continue;
+        auto it = symPrices.find(ep.symbol);
+        if (it == symPrices.end()) continue;
+        double cur = it->second;
+
+        bool hit = ep.isShort ? (cur >= ep.entryPrice) : (cur <= ep.entryPrice);
+        if (hit) triggered.push_back(&ep);
+    }
+
+    if (triggered.empty()) { std::cout << "  (no entries triggered)\n"; return; }
+
+    std::cout << "  Triggered entries:\n";
+    for (const auto* ep : triggered)
+    {
+        double cur = symPrices[ep->symbol];
+        std::cout << "    [" << ep->entryId << "]  " << ep->symbol
+                  << "  entry=" << ep->entryPrice
+                  << "  market=" << cur
+                  << "  qty=" << ep->fundingQty
+                  << (ep->isShort ? " SHORT" : " LONG") << "\n";
+    }
+
+    int exec = readInt("  Execute all? (1=yes, 0=no): ");
+    if (exec != 1) return;
+
+    int done = 0;
+    for (auto* ep : triggered)
+    {
+        double fee = readDouble(("  Buy fee for [" + std::to_string(ep->entryId) + "]: ").c_str());
+        double cost = ep->entryPrice * ep->fundingQty + fee;
+        double walBal = db.loadWalletBalance();
+        if (cost > walBal)
+        {
+            std::cout << "    [" << ep->entryId << "] SKIPPED (need "
+                      << cost << ", have " << walBal << ")\n";
+            continue;
+        }
+        int bid = db.executeBuy(ep->symbol, ep->entryPrice, ep->fundingQty, fee);
+        ep->traded = true;
+        ep->linkedTradeId = bid;
+
+        auto trades = db.loadTrades();
+        auto* tradePtr = db.findTradeById(trades, bid);
+        if (tradePtr)
+        {
+            tradePtr->takeProfit = ep->exitTakeProfit * tradePtr->quantity;
+            tradePtr->stopLoss = ep->exitStopLoss * tradePtr->quantity;
+            tradePtr->stopLossActive = false;
+            db.updateTrade(*tradePtr);
+        }
+        std::cout << "    -> Buy #" << bid << "  " << ep->fundingQty
+                  << " @ " << ep->entryPrice << "\n";
+        ++done;
+    }
+    db.saveEntryPoints(points);
+    std::cout << "  -> Executed " << done << " entries.\n";
+}
+
+// ---- hledger export ----
+
+static void exportHledger(TradeDatabase& db)
+{
+    auto sym   = readSymbol("  Symbol: ");
+    auto points = db.loadEntryPoints();
+
+    std::vector<const TradeDatabase::EntryPoint*> matching;
+    for (const auto& ep : points)
+        if (ep.symbol == sym) matching.push_back(&ep);
+
+    if (matching.empty()) { std::cout << "  (no entries for " << sym << ")\n"; return; }
+
+    auto path = readString("  Output file path (e.g. journal.txt): ");
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) { std::cout << "  Cannot open " << path << "\n"; return; }
+
+    f << std::fixed << std::setprecision(8);
+    f << "; hledger journal for " << sym << "\n\n";
+
+    for (const auto* ep : matching)
+    {
+        double cost = ep->entryPrice * ep->fundingQty;
+        f << "; Entry [" << ep->entryId << "] lvl=" << ep->levelIndex
+          << (ep->isShort ? " SHORT" : " LONG") << "\n";
+
+        if (ep->isShort)
+        {
+            f << "~  " << sym << " short entry\n"
+              << "    liabilities:short:" << sym << "    "
+              << ep->fundingQty << " " << sym << " @ " << ep->entryPrice << "\n"
+              << "    assets:exchange                     " << cost << "\n\n";
+        }
+        else
+        {
+            f << "~  " << sym << " buy entry\n"
+              << "    assets:exchange:" << sym << "       "
+              << ep->fundingQty << " " << sym << " @ " << ep->entryPrice << "\n"
+              << "    assets:exchange                     " << (-cost) << "\n\n";
+        }
+
+        if (ep->exitTakeProfit > 0)
+        {
+            double tpVal = ep->exitTakeProfit * ep->fundingQty;
+            double tpProfit = tpVal - cost;
+            f << "~  " << sym << " take-profit\n"
+              << "    assets:exchange                      " << tpVal << "\n"
+              << "    assets:exchange:" << sym << "       "
+              << (-static_cast<double>(ep->fundingQty)) << " " << sym << "\n"
+              << "    income:trading:" << sym << "         " << (-tpProfit) << "\n\n";
+        }
+    }
+    std::cout << "  -> Exported " << matching.size() << " entries to " << path << "\n";
+}
+
+// ---- Price series ----
+
+static void priceSeriesMenu(TradeDatabase& db)
+{
+    PriceSeries ps;
+    db.seedPriceSeries(ps);
+
+    std::cout << "  Price Series:\n"
+              << "    1) View prices\n"
+              << "    2) Record price\n"
+              << "    0) Back\n";
+    int c = readInt("  > ");
+
+    if (c == 1)
+    {
+        auto sym = readSymbol("  Symbol (or * for all): ");
+        const auto& data = ps.data();
+        if (sym == "*")
+        {
+            for (const auto& [s, pts] : data)
+            {
+                std::cout << "  " << s << ": " << pts.size() << " points\n";
+                int show = std::min(static_cast<int>(pts.size()), 10);
+                for (int i = static_cast<int>(pts.size()) - show; i < static_cast<int>(pts.size()); ++i)
+                    std::cout << "    ts=" << pts[i].timestamp << "  " << pts[i].price << "\n";
+            }
+        }
+        else
+        {
+            auto it = data.find(sym);
+            if (it == data.end()) { std::cout << "  (no data for " << sym << ")\n"; return; }
+            std::cout << std::fixed << std::setprecision(2);
+            for (const auto& pt : it->second)
+                std::cout << "    ts=" << pt.timestamp << "  " << pt.price << "\n";
+        }
+    }
+    else if (c == 2)
+    {
+        auto sym   = readSymbol("  Symbol: ");
+        double price = readDouble("  Price: ");
+        long long ts = static_cast<long long>(std::time(nullptr));
+
+        // Record as a zero-qty trade to seed the price series
+        Trade t;
+        t.tradeId  = db.nextTradeId();
+        t.symbol   = sym;
+        t.type     = TradeType::Buy;
+        t.value    = price;
+        t.quantity = 0;
+        t.timestamp = ts;
+        db.addTrade(t);
+        std::cout << "  -> Price " << price << " recorded for " << sym << ".\n";
+    }
+}
+
 // ---- Main ----
 
 int main()
@@ -2177,6 +2657,15 @@ int main()
         std::cout << "  27) Simulator\n";
         std::cout << "  28) P&L ledger\n";
         std::cout << "  29) Parameter models\n";
+        std::cout << "  30) Execute buy/sell\n";
+        std::cout << "  31) Set TP/SL\n";
+        std::cout << "  32) Deallocate holdings\n";
+        std::cout << "  33) Chain advance\n";
+        std::cout << "  34) Chain reset\n";
+        std::cout << "  35) P&L backfill\n";
+        std::cout << "  36) Execute triggered entries\n";
+        std::cout << "  37) Export hledger\n";
+        std::cout << "  38) Price series\n";
         std::cout << "   0) Exit\n";
         printSep();
 
@@ -2214,6 +2703,15 @@ int main()
         case 27: runSimulator(db);       break;
         case 28: viewPnlLedger(db);      break;
         case 29: paramModelsMenu(db);    break;
+        case 30: executeBuySell(db);      break;
+        case 31: setTpSl(db);             break;
+        case 32: deallocateHoldings(db);   break;
+        case 33: chainAdvance(db);         break;
+        case 34: chainReset(db);           break;
+        case 35: pnlBackfill(db);          break;
+        case 36: executeTriggeredEntries(db); break;
+        case 37: exportHledger(db);        break;
+        case 38: priceSeriesMenu(db);      break;
         case 0:  running = false;        break;
         default: std::cout << "  Invalid choice.\n"; break;
         }

@@ -35,7 +35,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
             h << "<table><tr>"
                  "<th>ID</th><th>Date</th><th>Symbol</th><th>Type</th><th>Price</th><th>Qty</th>"
                  "<th>Cost</th><th>Fees</th>"
-                 "<th>TP</th><th>SL</th><th>SL?</th>"
+                 "<th>TP</th><th>TP?</th><th>SL</th><th>SL?</th>"
                  "<th>Sold</th><th>Rem</th><th>Realized</th><th>Actions</th>"
                  "</tr>";
 
@@ -72,17 +72,34 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                   << "<td><form class='iform' method='POST' action='/set-tp'>"
                   << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
                   << "<input type='number' name='tp' step='any' value='" << b.takeProfit << "' style='width:70px;'>"
-                  << "<button class='btn-sm' title='Set TP'>&#10003;</button></form></td>"
+                  << "<button class='btn-sm' title='Set TP'>&#10003;</button></form>"
+                  << "<form class='iform' method='POST' action='/set-tp' style='display:inline;'>"
+                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
+                  << "<input type='hidden' name='tp' value='0'>"
+                  << "<button class='btn-sm btn-danger' title='Clear TP'>&times;</button></form></td>"
+                  // TP active checkbox
+                  << "<td><form class='iform' method='POST' action='/set-tp-active'>"
+                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
+                  << "<input type='hidden' name='active' value='" << (b.takeProfitActive ? "0" : "1") << "'>"
+                  << "<input type='checkbox'" << (b.takeProfitActive ? " checked" : "")
+                  << " onchange='this.form.submit()' title='TP " << (b.takeProfitActive ? "ON" : "OFF") << "'>"
+                  << "</form></td>"
                   // SL inline
                   << "<td><form class='iform' method='POST' action='/set-sl'>"
                   << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
                   << "<input type='number' name='sl' step='any' value='" << b.stopLoss << "' style='width:70px;'>"
-                  << "<button class='btn-sm' title='Set SL'>&#10003;</button></form></td>"
-                  // SL toggle
-                  << "<td><form class='iform' method='POST' action='/toggle-sl'>"
+                  << "<button class='btn-sm' title='Set SL'>&#10003;</button></form>"
+                  << "<form class='iform' method='POST' action='/set-sl' style='display:inline;'>"
                   << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<button class='btn-sm " << (b.stopLossActive ? "btn-warn" : "") << "'>"
-                  << (b.stopLossActive ? "ON" : "OFF") << "</button></form></td>"
+                  << "<input type='hidden' name='sl' value='0'>"
+                  << "<button class='btn-sm btn-danger' title='Clear SL'>&times;</button></form></td>"
+                  // SL active checkbox
+                  << "<td><form class='iform' method='POST' action='/set-sl-active'>"
+                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
+                  << "<input type='hidden' name='active' value='" << (b.stopLossActive ? "0" : "1") << "'>"
+                  << "<input type='checkbox'" << (b.stopLossActive ? " checked" : "")
+                  << " onchange='this.form.submit()' title='SL " << (b.stopLossActive ? "ON" : "OFF") << "'>"
+                  << "</form></td>"
                   << "<td>" << sold << "</td><td>" << remaining << "</td>"
                   << "<td class='" << (realized >= 0 ? "buy" : "sell") << "'>" << realized << "</td>"
                   << "<td>"
@@ -107,7 +124,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                       << "<td>" << c.value << "</td><td>" << c.quantity << "</td>"
                       << "<td>" << cGross << "</td>"
                       << "<td>" << c.sellFee << "</td>"
-                      << "<td>-</td><td>-</td><td>-</td>"
+                      << "<td>-</td><td>-</td><td>-</td><td>-</td>"
                       << "<td>-</td><td>-</td>"
                       << "<td class='" << (profit.netProfit >= 0 ? "buy" : "sell") << "'>"
                       << profit.netProfit << " (" << std::setprecision(2) << profit.roi << "%)" << std::setprecision(17) << "</td>"
@@ -133,7 +150,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                   << "<td>" << s.value << "</td><td>" << s.quantity << "</td>"
                   << "<td>" << cGross << "</td>"
                   << "<td>" << s.sellFee << "</td>"
-                  << "<td>-</td><td>-</td><td>-</td>"
+                  << "<td>-</td><td>-</td><td>-</td><td>-</td>"
                   << "<td>-</td><td>-</td><td>-</td>"
                   << "<td>"
                   << "<a class='btn btn-sm' href='/edit-trade?id=" << s.tradeId << "'>Edit</a> "
@@ -264,6 +281,21 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
         res.set_redirect("/trades?msg=SL+now+" + state + "+for+" + std::to_string(id), 303);
     });
 
+    // ========== POST /set-sl-active ==========
+    svr.Post("/set-sl-active", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
+        bool want = (fv(f, "active") == "1");
+        tp->stopLossActive = want && (tp->stopLoss > 0);
+        db.updateTrade(*tp);
+        std::string state = tp->stopLossActive ? "ON" : "OFF";
+        res.set_redirect("/trades?msg=SL+now+" + state + "+for+" + std::to_string(id), 303);
+    });
+
     // ========== POST /set-tp ==========
     svr.Post("/set-tp", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
@@ -273,8 +305,24 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
         auto* t = db.findTradeById(trades, id);
         if (!t) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
         t->takeProfit = fd(f, "tp");
+        t->takeProfitActive = (t->takeProfit > 0);
         db.updateTrade(*t);
         res.set_redirect("/trades?msg=TP+set+to+" + fv(f, "tp") + "+for+" + std::to_string(id), 303);
+    });
+
+    // ========== POST /set-tp-active ==========
+    svr.Post("/set-tp-active", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int id = fi(f, "id");
+        auto trades = db.loadTrades();
+        auto* tp = db.findTradeById(trades, id);
+        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
+        bool want = (fv(f, "active") == "1");
+        tp->takeProfitActive = want && (tp->takeProfit > 0);
+        db.updateTrade(*tp);
+        std::string state = tp->takeProfitActive ? "ON" : "OFF";
+        res.set_redirect("/trades?msg=TP+now+" + state + "+for+" + std::to_string(id), 303);
     });
 
     // ========== POST /set-sl ==========
@@ -286,8 +334,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
         auto* t = db.findTradeById(trades, id);
         if (!t) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
         t->stopLoss = fd(f, "sl");
-        if (t->stopLoss > 0 && !t->stopLossActive)
-            t->stopLossActive = true;
+        t->stopLossActive = (t->stopLoss > 0);
         db.updateTrade(*t);
         res.set_redirect("/trades?msg=SL+set+to+" + fv(f, "sl") + "+for+" + std::to_string(id), 303);
     });
@@ -377,12 +424,10 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                  "<div style='color:#64748b;font-size:0.78em;'>-1 = none (for Buy trades)</div><br>"
                  "<label>Buy Fee</label><input type='number' name='buyFee' step='any' value='" << tp->buyFee << "'><br>"
                  "<label>Sell Fee</label><input type='number' name='sellFee' step='any' value='" << tp->sellFee << "'><br>"
-                 "<label>Take Profit</label><input type='number' name='takeProfit' step='any' value='" << tp->takeProfit << "'><br>"
-                 "<label>Stop Loss</label><input type='number' name='stopLoss' step='any' value='" << tp->stopLoss << "'><br>"
-                 "<label>SL Active</label><select name='stopLossActive'>"
-                 "<option value='0'" << (!tp->stopLossActive ? " selected" : "") << ">OFF</option>"
-                 "<option value='1'" << (tp->stopLossActive ? " selected" : "") << ">ON</option>"
-                 "</select><br>"
+                 "<label>Take Profit</label><input type='number' name='takeProfit' step='any' value='" << tp->takeProfit << "'>"
+                 "<span style='color:#64748b;font-size:0.78em;margin-left:8px;'>" << (tp->takeProfitActive ? "active" : "inactive (set value &gt; 0 to activate)") << "</span><br>"
+                 "<label>Stop Loss</label><input type='number' name='stopLoss' step='any' value='" << tp->stopLoss << "'>"
+                 "<span style='color:#64748b;font-size:0.78em;margin-left:8px;'>" << (tp->stopLossActive ? "active" : "inactive (set value &gt; 0 to activate)") << "</span><br>"
                  "<br><button>Save Changes</button></form>";
         }
         h << "<br><a class='btn' href='/trades'>Back to Trades</a>";
@@ -426,9 +471,9 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
         tp->buyFee = fd(f, "buyFee", tp->buyFee);
         tp->sellFee = fd(f, "sellFee", tp->sellFee);
         tp->takeProfit = fd(f, "takeProfit", tp->takeProfit);
+        tp->takeProfitActive = (tp->takeProfit > 0);
         tp->stopLoss = fd(f, "stopLoss", tp->stopLoss);
-        auto slStr = fv(f, "stopLossActive");
-        if (!slStr.empty()) tp->stopLossActive = (slStr == "1");
+        tp->stopLossActive = (tp->stopLoss > 0);
         auto tsStr = fv(f, "timestamp");
         if (!tsStr.empty()) tp->timestamp = html::parseDatetimeLocal(tsStr);
         db.updateTrade(*tp);

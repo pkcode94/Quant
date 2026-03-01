@@ -67,6 +67,7 @@ public:
             j["quantity"] = JD(t.quantity);
             j["parentTradeId"] = JI(t.parentTradeId);
             j["takeProfit"] = JD(t.takeProfit);
+            j["takeProfitActive"] = JB(t.takeProfitActive);
             j["stopLoss"] = JD(t.stopLoss);
             j["stopLossActive"] = JB(t.stopLossActive);
             j["shortEnabled"] = JB(t.shortEnabled);
@@ -141,6 +142,7 @@ public:
             t.quantity      = gd(item, "quantity");
             t.parentTradeId = gi(item, "parentTradeId");
             t.takeProfit    = gd(item, "takeProfit");
+            t.takeProfitActive = gb(item, "takeProfitActive");
             t.stopLoss      = gd(item, "stopLoss");
             t.stopLossActive = gb(item, "stopLossActive");
             t.shortEnabled  = gb(item, "shortEnabled");
@@ -748,6 +750,7 @@ public:
         buy.quantity   = qty;
         buy.buyFee     = buyFee;
         buy.takeProfit = takeProfit;
+        buy.takeProfitActive = (takeProfit > 0.0);
         buy.stopLoss   = stopLoss;
         buy.timestamp  = static_cast<long long>(std::time(nullptr));
         addTrade(buy);

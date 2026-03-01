@@ -89,7 +89,7 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
             double roi   = pnl.roiPct;
             double tpPrice = 0, slPrice = 0;
             bool tpHit = false, slHit = false;
-            if (t.takeProfit > 0) { tpPrice = t.takeProfit / t.quantity; tpHit = (cur >= tpPrice); }
+            if (t.takeProfitActive && t.takeProfit > 0) { tpPrice = t.takeProfit / t.quantity; tpHit = (cur >= tpPrice); }
             if (t.stopLossActive && t.stopLoss > 0) { slPrice = t.stopLoss / t.quantity; slHit = (cur <= slPrice); }
             h << "<tr><td>" << t.tradeId << "</td><td>" << html::esc(t.symbol) << "</td><td>" << t.value << "</td><td>" << remaining << "</td>"
               << "<td>" << cur << "</td><td class='" << (gross >= 0 ? "buy" : "sell") << "'>" << gross << "</td>"
