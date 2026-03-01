@@ -112,8 +112,8 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
                 else h << "-";
                 h << "</td></tr>";
             }
-            if (tpHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining, "TP"});
-            if (slHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining, "SL"});
+            if (tpHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.takeProfitFraction, "TP"});
+            if (slHit) triggers.push_back({t.tradeId, t.symbol, cur, remaining * t.stopLossFraction, "SL"});
         }
         h << "</table>";
         auto pending = db.loadPendingExits();
@@ -243,7 +243,10 @@ inline void registerPriceCheckRoutes(httplib::Server& svr, AppContext& ctx)
                 auto* tradePtr = db.findTradeById(trades, ep.linkedTradeId);
                 if (!tradePtr) continue;
                 tradePtr->takeProfit = ep.exitTakeProfit * tradePtr->quantity;
+                tradePtr->takeProfitFraction = (ep.exitTakeProfit > 0) ? 1.0 : 0.0;
+                tradePtr->takeProfitActive = (tradePtr->takeProfitFraction > 0.0);
                 tradePtr->stopLoss = ep.exitStopLoss * tradePtr->quantity;
+                tradePtr->stopLossFraction = 0.0;
                 tradePtr->stopLossActive = false;
                 db.updateTrade(*tradePtr);
             }

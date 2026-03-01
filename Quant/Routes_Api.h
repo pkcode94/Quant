@@ -87,7 +87,10 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
               << ",\"buyFee\":" << t.buyFee
               << ",\"sellFee\":" << t.sellFee
               << ",\"tp\":" << t.takeProfit
+              << ",\"tpFrac\":" << t.takeProfitFraction
+              << ",\"tpActive\":" << (t.takeProfitActive ? "true" : "false")
               << ",\"sl\":" << t.stopLoss
+              << ",\"slFrac\":" << t.stopLossFraction
               << ",\"tpPrice\":" << tpPrice
               << ",\"slPrice\":" << slPrice
               << ",\"slActive\":" << (t.stopLossActive ? "true" : "false")
@@ -1226,6 +1229,7 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
             ep.exitTakeProfit = tpPerUnit;
             ep.exitStopLoss = slPerUnit;
             ep.stopLossActive = trade->stopLossActive;
+            ep.stopLossFraction = trade->stopLossFraction;
             tradeEpId = ep.entryId;
             allEntries.push_back(ep);
         }

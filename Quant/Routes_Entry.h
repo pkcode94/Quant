@@ -406,7 +406,10 @@ inline void registerEntryRoutes(httplib::Server& svr, AppContext& ctx)
                 auto* tradePtr = db.findTradeById(trades, ep.linkedTradeId);
                 if (!tradePtr) continue;
                 tradePtr->takeProfit = QuantMath::cost(ep.exitTakeProfit, tradePtr->quantity);
+                tradePtr->takeProfitFraction = (ep.exitTakeProfit > 0) ? 1.0 : 0.0;
+                tradePtr->takeProfitActive = (tradePtr->takeProfitFraction > 0.0);
                 tradePtr->stopLoss = QuantMath::cost(ep.exitStopLoss, tradePtr->quantity);
+                tradePtr->stopLossFraction = 0.0;
                 tradePtr->stopLossActive = false;
                 db.updateTrade(*tradePtr);
             }

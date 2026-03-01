@@ -67,8 +67,10 @@ public:
             j["quantity"] = JD(t.quantity);
             j["parentTradeId"] = JI(t.parentTradeId);
             j["takeProfit"] = JD(t.takeProfit);
+            j["takeProfitFraction"] = JD(t.takeProfitFraction);
             j["takeProfitActive"] = JB(t.takeProfitActive);
             j["stopLoss"] = JD(t.stopLoss);
+            j["stopLossFraction"] = JD(t.stopLossFraction);
             j["stopLossActive"] = JB(t.stopLossActive);
             j["shortEnabled"] = JB(t.shortEnabled);
             j["buyFee"] = JD(t.buyFee);
@@ -142,9 +144,12 @@ public:
             t.quantity      = gd(item, "quantity");
             t.parentTradeId = gi(item, "parentTradeId");
             t.takeProfit    = gd(item, "takeProfit");
-            t.takeProfitActive = gb(item, "takeProfitActive");
+            t.takeProfitFraction = gd(item, "takeProfitFraction");
             t.stopLoss      = gd(item, "stopLoss");
-            t.stopLossActive = gb(item, "stopLossActive");
+            t.stopLossFraction = gd(item, "stopLossFraction");
+            // derive active from fraction (fraction is source of truth)
+            t.takeProfitActive = (t.takeProfitFraction > 0.0);
+            t.stopLossActive   = (t.stopLossFraction > 0.0);
             t.shortEnabled  = gb(item, "shortEnabled");
             t.buyFee        = gd(item, "buyFee");
             t.sellFee       = gd(item, "sellFee");
@@ -492,6 +497,7 @@ public:
         int    linkedTradeId      = -1;
         double exitTakeProfit     = 0.0;   // per-unit TP price
         double exitStopLoss       = 0.0;   // per-unit SL price
+        double stopLossFraction   = 0.0;   // 0=SL off, >0=sell fraction
         bool   stopLossActive     = false;
     };
 
@@ -514,6 +520,7 @@ public:
             j["linkedTradeId"] = JI(ep.linkedTradeId);
             j["exitTakeProfit"] = JD(ep.exitTakeProfit);
             j["exitStopLoss"] = JD(ep.exitStopLoss);
+            j["stopLossFraction"] = JD(ep.stopLossFraction);
             j["stopLossActive"] = JB(ep.stopLossActive);
             arr.push_back(std::move(j));
         }
@@ -542,7 +549,8 @@ public:
             ep.linkedTradeId     = gi(item, "linkedTradeId");
             ep.exitTakeProfit    = gd(item, "exitTakeProfit");
             ep.exitStopLoss      = gd(item, "exitStopLoss");
-            ep.stopLossActive    = gb(item, "stopLossActive");
+            ep.stopLossFraction  = gd(item, "stopLossFraction");
+            ep.stopLossActive    = (ep.stopLossFraction > 0.0);
             out.push_back(ep);
         }
         return out;
@@ -750,8 +758,10 @@ public:
         buy.quantity   = qty;
         buy.buyFee     = buyFee;
         buy.takeProfit = takeProfit;
-        buy.takeProfitActive = (takeProfit > 0.0);
+        buy.takeProfitFraction = (takeProfit > 0.0) ? 1.0 : 0.0;
+        buy.takeProfitActive = (buy.takeProfitFraction > 0.0);
         buy.stopLoss   = stopLoss;
+        buy.stopLossFraction = 0.0;
         buy.timestamp  = static_cast<long long>(std::time(nullptr));
         addTrade(buy);
 
@@ -815,7 +825,7 @@ tr:nth-child(even){background:#0f1b2d}
             f << "<table><tr><th>ID</th><th>Symbol</th><th>Type</th>"
               << "<th>Price</th><th>Qty</th><th>Parent</th>"
               << "<th>Buy Fee</th><th>Sell Fee</th>"
-              << "<th>TP</th><th>SL</th><th>SL Active</th></tr>\n";
+              << "<th>TP</th><th>TP%</th><th>SL</th><th>SL%</th></tr>\n";
             for (const auto& t : trades)
             {
                 f << "<tr><td>" << t.tradeId << "</td>"
@@ -828,8 +838,9 @@ tr:nth-child(even){background:#0f1b2d}
                   << "<td>" << t.buyFee << "</td>"
                   << "<td>" << t.sellFee << "</td>"
                   << "<td>" << t.takeProfit << "</td>"
+                  << "<td>" << (t.takeProfitFraction * 100) << "%</td>"
                   << "<td>" << t.stopLoss << "</td>"
-                  << "<td>" << (t.stopLossActive ? "ON" : "OFF") << "</td></tr>\n";
+                  << "<td>" << (t.stopLossFraction * 100) << "%</td></tr>\n";
             }
             f << "</table>\n";
         }
@@ -944,8 +955,9 @@ tr:nth-child(even){background:#0f1b2d}
             if (t.buyFee > 0) f << "  buyFee=" << t.buyFee;
             if (t.sellFee > 0) f << "  sellFee=" << t.sellFee;
             f << "  TP=" << t.takeProfit
+              << " [TP " << (t.takeProfitFraction * 100) << "%]"
               << "  SL=" << t.stopLoss
-              << (t.stopLossActive ? " [SL ON]" : " [SL OFF]")
+              << " [SL " << (t.stopLossFraction * 100) << "%]"
               << "\n";
         }
 
