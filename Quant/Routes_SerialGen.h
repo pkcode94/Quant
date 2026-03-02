@@ -170,7 +170,9 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
               << "<input type='hidden' name='ef_" << e.index << "' value='" << e.funding << "'>"
               << "<input type='hidden' name='eov_" << e.index << "' value='" << eo << "'>"
               << "<input type='hidden' name='etp_" << e.index << "' value='" << e.tpUnit << "'>"
-              << "<input type='hidden' name='esl_" << e.index << "' value='" << e.slUnit << "'>";
+              << "<input type='hidden' name='esl_" << e.index << "' value='" << e.slUnit << "'>"
+              << "<input type='hidden' name='eslq_" << e.index << "' value='" << e.slQty << "'>"
+              << "<input type='hidden' name='eslf_" << e.index << "' value='" << slFrac << "'>";
         }
         h << "<button>Save Entry Points</button></form>";
         h << "<h2>Export to hledger</h2><form class='card' method='POST' action='/export-hledger'>"
@@ -305,6 +307,8 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
             double effOh = fd(f, "eov_" + si);
             double exitTP = fd(f, "etp_" + si);
             double exitSL = fd(f, "esl_" + si);
+            double exitSLQty = fd(f, "eslq_" + si);
+            double exitSLFrac = fd(f, "eslf_" + si);
             if (funding <= 0) continue;
             double saveCost = QuantMath::cost(entryPrice, fundQty);
             TradeDatabase::EntryPoint ep;
@@ -313,6 +317,7 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
             ep.funding = funding; ep.fundingQty = fundQty;
             ep.effectiveOverhead = effOh; ep.isShort = isShort;
             ep.exitTakeProfit = exitTP; ep.exitStopLoss = exitSL;
+            ep.stopLossFraction = exitSLFrac;
             ep.traded = false; ep.linkedTradeId = -1;
             newPoints.push_back(ep);
             h << "<tr><td>" << i << "</td><td>" << entryPrice << "</td><td>" << fundQty << "</td>"

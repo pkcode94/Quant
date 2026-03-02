@@ -20,6 +20,7 @@
 #include "Routes_Admin.h"
 #include "Routes_Premium.h"
 #include "Routes_Simulator.h"
+#include "Routes_Symbols.h"
 
 #include <mutex>
 #include <thread>
@@ -74,6 +75,7 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     registerAdminRoutes(svr, ctx);
     registerPremiumRoutes(svr, ctx);
     registerSimulatorRoutes(svr, ctx);
+    registerSymbolRoutes(svr, ctx);
 
     std::cout << "  [HTTP] listening on http://localhost:" << port << "\n";
     svr.listen("0.0.0.0", port);

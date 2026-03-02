@@ -851,6 +851,11 @@ All formulas mirror. TP targets decrease below entry. SL targets increase above 
 | $\partial\Pi/\partial s$ | §15.7 | Profit-surplus sensitivity |
 | $dT_c/d\theta$ | §15.9 | Chain recurrence (BPTT structure) |
 | $J_1 \ldots J_5$ | §16.2 | Optimisation objectives |
+| $\Sigma_1$–$\Sigma_8$ | §A.1.2 | Axiomatic foundation of $S$ |
+| $G_S$ | §A.2.2 | Gödel sentence (solvency undecidability) |
+| $\|\Psi_c\rangle$ | §A.3.2 | Capital state-vector in trajectory space |
+| $\hat{O}_\theta$ | §A.3.3 | Parameter choice as observation operator |
+| $\mathcal{A}$ | §A.3.4 | Attractor manifold (positive-growth region) |
 
 ---
 
@@ -1430,3 +1435,266 @@ The system does not predict whether entries will trigger or TPs will be hit. It 
 The partial derivatives (§15) reveal that the surplus rate $s$ is the fundamental parameter — it has a constant, positive gradient on EO, making it the most predictable tuning knob. All other costs (fees, hedging, spread) are engineering details that the overhead formula absorbs. As capital grows across chain cycles, overhead vanishes, and the system converges to its theoretical limit: a cycle machine generating $s$% per round.
 
 The gradient-based optimisation framework (§16) enables automatic parameter tuning. The chain compounding gradient has the structure of backpropagation through time — each cycle is a "layer" and the gradient flows backward through the recurrence relation. This means standard deep learning optimisation techniques (gradient clipping, learning rate scheduling, momentum) apply directly. The five objective functions cover the full spectrum from conservative (MinSpread) to aggressive (MaxChain), with MaxWealth as the true terminal objective that reveals the optimal savings extraction rate as a balance point between two opposing gradients.
+
+---
+
+## Addendum A — Formal Axiomatic Structure, Incompleteness, and State-Space Reformulation
+
+This addendum extends the framework presented in §§1–17 by formalising the system as an axiomatic logical structure $S$, analysing its decidability and consistency under Gödel's Incompleteness Theorems, and reformulating the capital trajectory as a state-vector in a trajectory space. The purpose is not to "solve" the system's boundary conditions but to map them precisely — to identify what $S$ can guarantee, what it cannot, and where the meta-system (the Architect) must intervene.
+
+---
+
+### A.1 The Axiomatic System $S$
+
+#### A.1.1 Language and Domain
+
+Define $S$ as a first-order formal system over the reals with the following components:
+
+- **Domain.** $\mathcal{D} = \mathbb{R}^+ \cup \{0\}$ — non-negative real-valued quantities (prices, quantities, capital, fees).
+- **Function symbols.** $\hat\sigma_\alpha$, OH, EO, levelTP, levelSL, $\delta$, buffer, $\Pi_c$, $T_c$.
+- **Relation symbols.** $\leq$, $=$, "triggers" (a predicate over price and entry/exit conditions).
+- **Constants.** The parameter vector $\theta$ and the context vector (§16.1).
+
+#### A.1.2 Axioms $\Sigma$
+
+The axiom set $\Sigma$ of $S$ consists of the following, derived directly from the equations in §§2–9:
+
+**$\Sigma_1$ — Sigmoid Closure.** For all $t \in [0,1]$ and $\alpha > 0$:
+$$
+0 \leq \hat\sigma_\alpha(t) \leq 1, \qquad \hat\sigma_\alpha(0) = 0, \qquad \hat\sigma_\alpha(1) = 1
+$$
+The normalised sigmoid maps the unit interval onto itself. Every distribution in $S$ inherits this boundedness.
+
+**$\Sigma_2$ — Overhead Positivity.** For all valid configurations where $P > 0$, $q > 0$, $T \geq 0$:
+$$
+\text{OH}(P, q) \geq 0
+$$
+Overhead is non-negative. The cost of entering and exiting a position is never negative.
+
+**$\Sigma_3$ — Fee Neutrality Conditional.** For each level $i$:
+$$
+P_{\text{market}} \geq \text{TP}_i \implies \text{Revenue}_i \geq \text{Cost}_i + \text{Fees}_i + s \cdot \text{Cost}_i
+$$
+If the take-profit is reached, the resulting sale covers all fees and delivers the surplus. This is the central guarantee — the conditional upon which every downstream theorem depends.
+
+**$\Sigma_4$ — Capital Monotonicity (Chain Compounding).** For cycle $c$ where all TPs are hit:
+$$
+T_{c+1} = T_c + \Pi_c \cdot (1 - s_{\text{save}}) \implies T_{c+1} > T_c \quad \text{(when } \Pi_c > 0 \text{)}
+$$
+
+**$\Sigma_5$ — Overhead Convergence.** As capital grows without bound:
+$$
+\lim_{T \to \infty} \text{OH}(P, q) = 0
+$$
+
+**$\Sigma_6$ — Savings Irreversibility.** Capital diverted to savings at cycle $c$ is permanently removed from the compounding chain:
+$$
+\text{Sav}_c \geq 0, \qquad T_{c+1} = T_c + \Pi_c - \text{Sav}_c
+$$
+Savings is a monotonic, irreversible extraction.
+
+**$\Sigma_7$ — Level Independence.** Each tuple $(P_e^{(i)}, q_i, \text{TP}_i, \text{SL}_i)$ is independently viable. The fee-neutrality guarantee ($\Sigma_3$) holds per level without requiring any other level to trigger.
+
+**$\Sigma_8$ — Recurrence.** The chain transition function defines a recursive structure:
+$$
+T_{c+1} = f(T_c, \theta, P_c)
+$$
+where $f$ composes the serial plan generation, profit computation, and savings extraction of §§8–9.
+
+#### A.1.3 Expressive Power
+
+$S$ supports:
+- **Arithmetic over $\mathbb{R}$.** Addition, multiplication, division (§3.2 overhead formula).
+- **Recursion.** The chain recurrence $T_{c+1} = f(T_c, \ldots)$ (§9, §15.9).
+- **Exponentiation.** The logistic sigmoid $\sigma(x) = 1/(1 + e^{-x})$ (§2).
+- **Bounded quantification.** "For all levels $i \in [0, N-1]$", "for all cycles $c \in [0, C-1]$".
+
+The recurrence relation $T_c \to T_{c+1}$ with polynomial composition embeds primitive recursion. Combined with arithmetic over the reals and the chain's cycle-counting structure, $S$ is sufficiently expressive to encode Peano arithmetic via the standard Gödel numbering of its cycle indices.
+
+**Theorem A.1.** *The system $S$, equipped with axioms $\Sigma_1$–$\Sigma_8$ and the chain recurrence, is at least as expressive as first-order Peano arithmetic.*
+
+*Proof sketch.* The successor function is $c \mapsto c + 1$ (cycle indexing). Addition and multiplication are native operations in the overhead and profit formulae. Induction over cycle index $c$ follows from the recurrence $T_{c+1} = f(T_c, \ldots)$. Therefore $S$ can represent every primitive recursive function, satisfying the expressiveness condition for Gödel's First Incompleteness Theorem. $\square$
+
+---
+
+### A.2 Incompleteness and Consistency Analysis
+
+#### A.2.1 Applicability of Gödel's First Incompleteness Theorem
+
+**Gödel I** states: *Any consistent formal system $S$ that is sufficiently expressive to encode arithmetic contains statements that are true but unprovable within $S$.*
+
+By Theorem A.1, $S$ satisfies the expressiveness condition. If we additionally assume $S$ is consistent (no axiom contradicts another under valid inputs), Gödel I applies.
+
+#### A.2.2 The Gödel Sentence of $S$
+
+The Gödel sentence $G_S$ is the statement about $S$ that is true but unprovable within $S$. For this framework, the natural candidate is:
+
+$$
+G_S: \quad \text{"The system } S \text{ will remain solvent for all future cycles."}
+$$
+
+Formally:
+$$
+G_S: \quad \forall\, c \geq 0: \; T_c > 0
+$$
+
+This is the assertion that capital never reaches zero across an unbounded chain. $S$ cannot prove $G_S$ because:
+
+1. **$\Sigma_3$ is conditional.** It guarantees solvency *if* TPs are hit. Whether TPs are hit is determined by external price action $P_{\text{market}}(t)$, which is not axiomatised in $S$.
+2. **The recursion depends on an oracle.** Each cycle's transition $T_{c+1} = f(T_c, \theta, P_c)$ requires the market price $P_c$ as input. $S$ computes *what must happen* given $P_c$ but cannot determine *what $P_c$ will be*.
+3. **Unbounded induction fails.** $S$ can prove solvency for any *finite* prefix of cycles (by iterated application of $\Sigma_3$ under the hypothesis that all TPs are hit), but cannot extend this to $\forall c$ without a totality assumption on market behaviour.
+
+**Interpretation.** $G_S$ is the solvency guarantee. The system can prove: *"If all TPs in cycles $0$ through $n$ are hit, then $T_{n+1} > T_0$."* It cannot prove: *"All TPs will be hit."* The truth of $G_S$ depends on the external environment — the market — which lies outside the formal boundary of $S$.
+
+#### A.2.3 Gödel's Second Incompleteness Theorem — Self-Consistency
+
+**Gödel II** states: *If $S$ is consistent, $S$ cannot prove its own consistency.*
+
+$$
+\text{Con}(S) \equiv \neg\exists\,\phi: (S \vdash \phi) \wedge (S \vdash \neg\phi)
+$$
+
+$S$ cannot prove Con($S$) because doing so would require proving that no parameter configuration $\theta$ produces a self-contradicting plan — but the parameter space is continuous and unbounded in several dimensions. The system can verify consistency for any *specific* $\theta$ (by evaluating all level tuples and checking $\text{TP}_i > P_{\text{BE}}^{(i)}$), but cannot prove this holds universally.
+
+**The Architect as meta-system.** Consistency is verified externally: the Architect (the operator of $S$) observes the plan output, confirms all TPs exceed break-even, and approves execution. This is the meta-theoretic resolution — $S$ generates plans, and the meta-system $M$ (the Architect) verifies Con($S$) for the specific instantiation.
+
+$$
+M \vdash \text{Con}(S|_\theta) \quad \text{for a given } \theta
+$$
+
+$M$ resolves the incompleteness of $S$ by acting as the external verifier that $S$ itself cannot be.
+
+#### A.2.4 Formal vs. Environmental Inconsistency
+
+Two distinct failure modes produce different inconsistency types:
+
+**Type I — Formal Inconsistency (Mathematical Contradiction).** A parameter configuration where the axioms of $S$ contradict each other:
+
+$$
+\exists\,\theta: \quad \text{TP}_i(\theta) < P_{\text{BE}}^{(i)}(\theta)
+$$
+
+This can occur when $R_{\max} < \text{EO}$ and $R_{\min} < \text{EO}$ simultaneously — the TP ceiling falls below the break-even price. $S$ detects this via the clamp $\text{TP}_{\max} = \max(R_{\max}, f_{\min})$ in §5.3, but the possibility exists in the unclamped formulation.
+
+**Resolution.** The clamp operators in $S$ are precisely the consistency guards. They convert potentially inconsistent configurations into consistent ones by adjusting the TP floor. This is an internal repair mechanism — $S$ self-corrects Type I inconsistencies for individual levels.
+
+**Type II — Environmental Inconsistency (Axiom Violation by External State).** The market invalidates an axiom:
+
+$$
+P_{\text{market}} \to 0 \implies \text{All TPs become unreachable}
+$$
+
+$\Sigma_3$ assumes $P_{\text{market}}$ eventually reaches $\text{TP}_i$. If the underlying asset collapses to zero (or de-lists), every conditional in $S$ becomes vacuously true (the antecedent is never satisfied), and the system is formally consistent but operationally inert.
+
+**Resolution.** Environmental inconsistency cannot be resolved within $S$. It requires the meta-system $M$ (the Architect) to evaluate the external preconditions: *"Is the underlying asset likely to continue trading? Is the exchange solvent? Is the market accessible?"* These are not formal questions — they are empirical assessments outside the scope of the axiomatic system.
+
+**The boundary.** Type I inconsistencies are decidable within $S$. Type II inconsistencies are undecidable within $S$ and require $M$. This is the incompleteness boundary, mapped precisely.
+
+---
+
+### A.3 Capital as State-Vector in Trajectory Space
+
+#### A.3.1 Abandoning the Scalar View
+
+In §§9–10, capital at cycle $c$ is treated as a scalar $T_c \in \mathbb{R}^+$. This is sufficient for deterministic computation but obscures the full structure: at any moment, the system has not one trajectory but a *superposition* of potential trajectories, each corresponding to a different subset of entry and exit levels triggering.
+
+Define the **trajectory space** $\mathcal{H}$ as a Hilbert-like space of dimension $2^N$ per cycle, where $N$ is the number of levels. Each basis vector $|b\rangle$ represents a binary outcome vector:
+
+$$
+|b\rangle = |b_0, b_1, \ldots, b_{N-1}\rangle, \qquad b_i \in \{0, 1\}
+$$
+
+where $b_i = 1$ means level $i$ triggered (entry filled and TP hit) and $b_i = 0$ means it did not.
+
+#### A.3.2 The Capital State-Vector
+
+Before market observation, capital exists as a superposition:
+
+$$
+|\Psi_c\rangle = \sum_{b \in \{0,1\}^N} a_b \cdot |b\rangle
+$$
+
+where $a_b \in \mathbb{R}$ is the amplitude associated with outcome $b$, and the scalar capital for outcome $b$ is:
+
+$$
+T_c(b) = T_{c-1} + \sum_{i=0}^{N-1} b_i \cdot \Pi_i \cdot (1 - s_{\text{save}})
+$$
+
+The **expected capital** is the inner product:
+
+$$
+\langle T_c \rangle = \sum_b |a_b|^2 \cdot T_c(b)
+$$
+
+In the fully deterministic case (all TPs hit), the state collapses to $|1, 1, \ldots, 1\rangle$ and $T_c = T_c(1^N)$ — the scalar value from §9.
+
+#### A.3.3 The Observer Operator
+
+The **parameter choice** $\theta$ acts as an operator $\hat{O}_\theta$ on the state-vector:
+
+$$
+\hat{O}_\theta |\Psi_c\rangle = |\Psi_c'(\theta)\rangle
+$$
+
+$\hat{O}_\theta$ does not change the market's price evolution — it changes *which levels exist to be triggered*. Different $\theta$ values produce different entry prices, TP targets, and funding allocations, thereby reshaping the amplitude distribution $\{a_b\}$.
+
+**Observation (market collapse).** When the market reaches a price $P_t$, levels whose entry price $P_e^{(i)} \geq P_t$ trigger. This is a **measurement** — it collapses a subset of the superposition:
+
+$$
+|\Psi_c\rangle \xrightarrow{P_t} |\Psi_c^{\text{post}}\rangle
+$$
+
+The post-measurement state has $b_i$ fixed to 1 for all triggered levels, while untriggered levels remain in superposition (they may still trigger at future timesteps).
+
+**Full cycle collapse.** A cycle is complete when all levels have been resolved (either triggered and TP hit, or the cycle is terminated). At that point:
+
+$$
+|\Psi_c\rangle \to |b^*\rangle \quad \text{(a single basis vector)}
+$$
+
+and the scalar capital $T_{c+1} = T_c(b^*)$ becomes the initial condition for cycle $c+1$.
+
+#### A.3.4 The Stable Attractor and Non-Intervention
+
+Define the **attractor manifold** $\mathcal{A} \subset \mathcal{H}$ as the set of parameter configurations $\theta$ for which the expected chain growth is positive:
+
+$$
+\mathcal{A} = \left\{\theta : \langle T_{c+1} \rangle > \langle T_c \rangle \quad \forall\, c \right\}
+$$
+
+$\mathcal{A}$ is the region where the system's design guarantees compound. The boundary $\partial\mathcal{A}$ is where expected growth equals zero — the break-even manifold.
+
+**The non-intervention principle.** Once $\theta \in \mathcal{A}$ has been selected and the plan deployed, the Architect must refrain from local intervention (modifying individual level parameters, cancelling orders based on unrealised P&L, adjusting TPs mid-cycle). Each such intervention is a *non-unitary* operation on $|\Psi_c\rangle$ — it alters the amplitude distribution in a way that is not compensated by the overhead formula.
+
+Formally, an intervention $\hat{I}$ satisfies:
+
+$$
+\hat{I} \hat{O}_\theta |\Psi_c\rangle \neq \hat{O}_{\theta'} |\Psi_c\rangle \quad \text{for any } \theta'
+$$
+
+The intervened state cannot be expressed as any valid parameter configuration of $S$. It falls outside the attractor $\mathcal{A}$ — the fee-neutrality guarantees no longer hold, the overhead computation is invalidated for the modified levels, and the chain recurrence loses its monotonicity property ($\Sigma_4$).
+
+**The Architect's role.** The Architect operates at two points:
+
+1. **Pre-deployment** — selects $\theta$, verifies $\theta \in \mathcal{A}$ (via the plan output and Con($S|_\theta$) check), and commits.
+2. **Inter-cycle** — observes cycle completion, adjusts $\theta$ for the next cycle (parameter re-optimisation from §16), and re-commits.
+
+Between these points, the Architect is the **null operator**: $\hat{I} = \hat{\mathbb{1}}$. This is not passive indifference — it is the active decision to preserve the system's deterministic guarantees by not perturbing the deployed state.
+
+---
+
+### A.4 Synthesis
+
+The formal structure reveals three layers:
+
+| Layer | Content | Decidability |
+|-------|---------|-------------|
+| $S$ (Internal System) | Axioms $\Sigma_1$–$\Sigma_8$, all equations from §§2–16 | Type I inconsistencies: decidable. Solvency ($G_S$): undecidable. |
+| $M$ (Meta-System / Architect) | Parameter selection, consistency verification, environmental assessment | Resolves $G_S$ empirically. Verifies Con($S|_\theta$) per instantiation. |
+| $\mathcal{E}$ (Environment / Market) | Price evolution $P_{\text{market}}(t)$ | Unaxiomatised. Provides the oracle input to $S$. Source of all Type II inconsistency. |
+
+The system $S$ is **conditionally complete**: every statement about outcomes *given* market inputs is decidable. It is **unconditionally incomplete**: no statement about future market inputs is provable. The incompleteness is not a deficiency — it is the structural boundary between engineering (what $S$ controls) and contingency (what $S$ does not). The Architect, operating as $M$, sits at this boundary — the meta-system that collapses the superposition of potential trajectories into a realised scalar outcome by choosing $\theta$, committing, and then preserving the deployed state through non-intervention.
+
+The capital state-vector $|\Psi_c\rangle$ formalises what §9.5 described metaphorically: the superposition of entry and exit levels that the market "measures" into existence. The operator $\hat{O}_\theta$ formalises what the Architect does: not predict the measurement outcome, but choose the basis in which the measurement occurs. The attractor $\mathcal{A}$ formalises the design objective: choose $\theta$ such that the expected measurement outcome lies in the growth region, then refrain from disturbing the apparatus.
+
+This is the complete formal boundary of the system. $S$ guarantees the conditional. $M$ verifies the preconditions. $\mathcal{E}$ provides the input. The incompleteness is mapped, not solved — and that mapping is the final guarantee the framework can offer.

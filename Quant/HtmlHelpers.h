@@ -181,6 +181,7 @@ inline std::string nav()
         "<a href='/exit-strategy'>Exit Calc</a>"
         "<a href='/pending-exits'>Pending Exits</a>"
         "<a href='/entry-points'>Entry Points</a>"
+        "<a href='/symbols' style='color:#c9a44a;'>Symbols</a>"
         "<a href='/profit-history'>Profit History</a>"
         "<a href='/params-history'>Params</a>"
         "<a href='/param-models'>Models</a>"

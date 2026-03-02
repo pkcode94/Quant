@@ -50,6 +50,12 @@ public:
                 if (ep.entryId > 0) used.insert(ep.entryId);
             m_entryIdGen.seed(used);
         }
+        {
+            std::set<int> used;
+            for (const auto& ep : loadExitPoints())
+                if (ep.exitId > 0) used.insert(ep.exitId);
+            m_exitIdGen.seed(used);
+        }
     }
 
     // ---- Trades ----
@@ -479,6 +485,90 @@ public:
 
     IdGenerator&       pendingIdGen()       { return m_pendingIdGen; }
     const IdGenerator& pendingIdGen() const { return m_pendingIdGen; }
+
+    // ---- Exit Points ----
+
+    struct ExitPoint
+    {
+        int    exitId          = 0;
+        int    tradeId         = 0;    // parent Buy trade
+        std::string symbol;
+        int    levelIndex      = 0;
+        double tpPrice         = 0.0;  // per-unit take-profit price
+        double slPrice         = 0.0;  // per-unit stop-loss price
+        double sellQty         = 0.0;  // quantity to sell at this level
+        double sellFraction    = 0.0;  // fraction of position (0-1)
+        bool   slActive        = false;
+        bool   executed        = false;
+        int    linkedSellId    = -1;   // trade ID of the sell, if executed
+    };
+
+    void saveExitPoints(const std::vector<ExitPoint>& points)
+    {
+        njs3::js_array arr;
+        for (const auto& ep : points)
+        {
+            njs3::json j(njs3::js_object{});
+            j["exitId"] = JI(ep.exitId);
+            j["tradeId"] = JI(ep.tradeId);
+            j["symbol"] = JStr(ep.symbol);
+            j["levelIndex"] = JI(ep.levelIndex);
+            j["tpPrice"] = JD(ep.tpPrice);
+            j["slPrice"] = JD(ep.slPrice);
+            j["sellQty"] = JD(ep.sellQty);
+            j["sellFraction"] = JD(ep.sellFraction);
+            j["slActive"] = JB(ep.slActive);
+            j["executed"] = JB(ep.executed);
+            j["linkedSellId"] = JI(ep.linkedSellId);
+            arr.push_back(std::move(j));
+        }
+        writeJson(exitPointsPath(), njs3::json(std::move(arr)));
+    }
+
+    std::vector<ExitPoint> loadExitPoints() const
+    {
+        std::vector<ExitPoint> out;
+        auto j = readJsonArr(exitPointsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
+        {
+            ExitPoint ep;
+            ep.exitId        = gi(item, "exitId");
+            ep.tradeId       = gi(item, "tradeId");
+            ep.symbol        = gs(item, "symbol");
+            ep.levelIndex    = gi(item, "levelIndex");
+            ep.tpPrice       = gd(item, "tpPrice");
+            ep.slPrice       = gd(item, "slPrice");
+            ep.sellQty       = gd(item, "sellQty");
+            ep.sellFraction  = gd(item, "sellFraction");
+            ep.slActive      = gb(item, "slActive");
+            ep.executed      = gb(item, "executed");
+            ep.linkedSellId  = gi(item, "linkedSellId");
+            out.push_back(ep);
+        }
+        return out;
+    }
+
+    std::vector<ExitPoint> loadExitPointsForTrade(int tradeId) const
+    {
+        std::vector<ExitPoint> out;
+        for (const auto& ep : loadExitPoints())
+            if (ep.tradeId == tradeId) out.push_back(ep);
+        return out;
+    }
+
+    int nextExitId()
+    {
+        int id = m_exitIdGen.acquire();
+        m_exitIdGen.commit(id);
+        return id;
+    }
+
+    void releaseExitId(int id) { m_exitIdGen.release(id); }
+
+    IdGenerator&       exitIdGen()       { return m_exitIdGen; }
+    const IdGenerator& exitIdGen() const { return m_exitIdGen; }
 
     // ---- Entry Points ----
 
@@ -1304,12 +1394,13 @@ tr:nth-child(even){background:#0f1b2d}
         std::filesystem::remove(pnlPath());
         std::filesystem::remove(chainStatePath());
         std::filesystem::remove(chainMembersPath());
+        std::filesystem::remove(exitPointsPath());
         // Also remove legacy CSV files if present
         for (const char* ext : {".csv"})
         {
             for (const char* name : {"trades", "horizons", "profits", "params",
                 "wallet", "pending_exits", "entry_points", "released",
-                "param_models", "pnl", "chain_state", "chain_members"})
+                "param_models", "pnl", "chain_state", "chain_members", "exit_points"})
                 std::filesystem::remove(m_dir + "/" + name + ext);
         }
         seedIdGenerators();
@@ -1320,6 +1411,7 @@ std::string  m_dir;
 IdGenerator  m_tradeIdGen;
 IdGenerator  m_pendingIdGen;
 IdGenerator  m_entryIdGen;
+IdGenerator  m_exitIdGen;
 
     std::string tradesPath()       const { return m_dir + "/trades.json"; }
     std::string horizonsPath()     const { return m_dir + "/horizons.json"; }
@@ -1333,6 +1425,7 @@ IdGenerator  m_entryIdGen;
     std::string pnlPath()          const { return m_dir + "/pnl.json"; }
     std::string chainStatePath()   const { return m_dir + "/chain_state.json"; }
     std::string chainMembersPath() const { return m_dir + "/chain_members.json"; }
+    std::string exitPointsPath()   const { return m_dir + "/exit_points.json"; }
 
     // ---- JSON I/O helpers ----
     static njs3::json readJsonArr(const std::string& path)

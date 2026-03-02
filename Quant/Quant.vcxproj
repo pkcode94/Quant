@@ -159,6 +159,7 @@
     <ClInclude Include="Routes_Profit.h" />
     <ClInclude Include="Routes_SerialGen.h" />
     <ClInclude Include="Routes_Simulator.h" />
+    <ClInclude Include="Routes_Symbols.h" />
     <ClInclude Include="Routes_Trades.h" />
     <ClInclude Include="Simulator.h" />
     <ClInclude Include="SymbolRegistry.h" />

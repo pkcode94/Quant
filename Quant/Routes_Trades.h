@@ -35,7 +35,6 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
             h << "<table><tr>"
                  "<th>ID</th><th>Date</th><th>Symbol</th><th>Type</th><th>Price</th><th>Qty</th>"
                  "<th>Cost</th><th>Fees</th>"
-                 "<th>TP</th><th>TP%</th><th>SL</th><th>SL%</th>"
                  "<th>Sold</th><th>Rem</th><th>Realized</th><th>Actions</th>"
                  "</tr>";
 
@@ -68,34 +67,6 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                   << "<td>" << b.value << "</td><td>" << b.quantity << "</td>"
                   << "<td>" << grossCost << "</td>"
                   << "<td>" << totalFees << "</td>"
-                  // TP inline
-                  << "<td><form class='iform' method='POST' action='/set-tp'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='number' name='tp' step='any' value='" << b.takeProfit << "' style='width:70px;'>"
-                  << "<button class='btn-sm' title='Set TP'>&#10003;</button></form>"
-                  << "<form class='iform' method='POST' action='/set-tp' style='display:inline;'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='hidden' name='tp' value='0'>"
-                  << "<button class='btn-sm btn-danger' title='Clear TP'>&times;</button></form></td>"
-                  // TP fraction
-                  << "<td><form class='iform' method='POST' action='/set-tp-frac'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='number' name='frac' step='0.01' min='0' max='1' value='" << b.takeProfitFraction << "' style='width:50px;'>"
-                  << "<button class='btn-sm' title='Set TP fraction'>&#10003;</button></form></td>"
-                  // SL inline
-                  << "<td><form class='iform' method='POST' action='/set-sl'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='number' name='sl' step='any' value='" << b.stopLoss << "' style='width:70px;'>"
-                  << "<button class='btn-sm' title='Set SL'>&#10003;</button></form>"
-                  << "<form class='iform' method='POST' action='/set-sl' style='display:inline;'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='hidden' name='sl' value='0'>"
-                  << "<button class='btn-sm btn-danger' title='Clear SL'>&times;</button></form></td>"
-                  // SL fraction
-                  << "<td><form class='iform' method='POST' action='/set-sl-frac'>"
-                  << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
-                  << "<input type='number' name='frac' step='0.01' min='0' max='1' value='" << b.stopLossFraction << "' style='width:50px;'>"
-                  << "<button class='btn-sm' title='Set SL fraction'>&#10003;</button></form></td>"
                   << "<td>" << sold << "</td><td>" << remaining << "</td>"
                   << "<td class='" << (realized >= 0 ? "buy" : "sell") << "'>" << realized << "</td>"
                   << "<td>"
@@ -103,6 +74,69 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                   << "<form class='iform' method='POST' action='/delete-trade'>"
                   << "<input type='hidden' name='id' value='" << b.tradeId << "'>"
                   << "<button class='btn-sm btn-danger'>Del</button></form>"
+                  << "</td></tr>";
+
+                // ---- exit point rows (editable TP/SL per level) ----
+                auto exitPts = db.loadExitPointsForTrade(b.tradeId);
+                for (const auto& xp : exitPts)
+                {
+                    std::string xpStatus = xp.executed ? "DONE" : "PENDING";
+                    std::string xpClass = xp.executed ? "off" : "buy";
+                    h << "<tr class='child-row' style='color:#64748b;font-size:0.85em;'>"
+                      << "<td><span class='child-indent'>&#9500;</span>X[" << xp.levelIndex << "]</td>"
+                      << "<td></td><td></td><td style='font-size:0.78em;'>EXIT</td>";
+                    if (!xp.executed)
+                    {
+                        // Editable TP
+                        h << "<td><form class='iform' method='POST' action='/set-exit-tp'>"
+                          << "<input type='hidden' name='exitId' value='" << xp.exitId << "'>"
+                          << "<input type='number' name='tp' step='any' value='" << xp.tpPrice << "' style='width:70px;'>"
+                          << "<button class='btn-sm' title='Set TP'>&#10003;</button></form></td>"
+                          // Editable sell qty
+                          << "<td><form class='iform' method='POST' action='/set-exit-qty'>"
+                          << "<input type='hidden' name='exitId' value='" << xp.exitId << "'>"
+                          << "<input type='number' name='qty' step='any' value='" << xp.sellQty << "' style='width:55px;'>"
+                          << "<button class='btn-sm' title='Set Qty'>&#10003;</button></form></td>"
+                          << "<td></td>"
+                          // Editable SL
+                          << "<td><form class='iform' method='POST' action='/set-exit-sl'>"
+                          << "<input type='hidden' name='exitId' value='" << xp.exitId << "'>"
+                          << "<input type='number' name='sl' step='any' value='" << xp.slPrice << "' style='width:70px;'>"
+                          << "<button class='btn-sm' title='Set SL'>&#10003;</button></form></td>"
+                          // SL active toggle + status + delete
+                          << "<td></td><td></td>"
+                          << "<td class='" << xpClass << "'>" << xpStatus
+                          << " <form class='iform' style='display:inline;' method='POST' action='/set-exit-sl-active'>"
+                          << "<input type='hidden' name='exitId' value='" << xp.exitId << "'>"
+                          << "<input type='hidden' name='active' value='" << (xp.slActive ? "0" : "1") << "'>"
+                          << "<button class='btn-sm" << (xp.slActive ? "" : " btn-danger") << "' title='Toggle SL'>SL:" << (xp.slActive ? "ON" : "OFF") << "</button></form></td>"
+                          << "<td>"
+                          << "<form class='iform' method='POST' action='/delete-exit'>"
+                          << "<input type='hidden' name='exitId' value='" << xp.exitId << "'>"
+                          << "<button class='btn-sm btn-danger'>Del</button></form>";
+                    }
+                    else
+                    {
+                        h << "<td>" << xp.tpPrice << "</td>"
+                          << "<td>" << xp.sellQty << "</td>"
+                          << "<td></td>"
+                          << "<td>" << xp.slPrice << "</td>"
+                          << "<td></td><td></td>"
+                          << "<td class='" << xpClass << "'>" << xpStatus << "</td>"
+                          << "<td>#" << xp.linkedSellId;
+                    }
+                    h << "</td></tr>";
+                }
+                // ---- add exit point button ----
+                h << "<tr class='child-row' style='font-size:0.82em;'>"
+                  << "<td colspan='12'>"
+                  << "<form class='iform' method='POST' action='/add-exit'>"
+                  << "<input type='hidden' name='tradeId' value='" << b.tradeId << "'>"
+                  << "<input type='hidden' name='symbol' value='" << html::esc(b.symbol) << "'>"
+                  << "<input type='number' name='tp' step='any' placeholder='TP price' style='width:70px;' required>"
+                  << "<input type='number' name='sl' step='any' placeholder='SL price' style='width:70px;' value='0'>"
+                  << "<input type='number' name='qty' step='any' placeholder='Sell qty' style='width:60px;' required>"
+                  << "<button class='btn-sm' title='Add exit point'>+ Exit</button></form>"
                   << "</td></tr>";
 
                 // ---- child rows (indented) ----
@@ -120,7 +154,6 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                       << "<td>" << c.value << "</td><td>" << c.quantity << "</td>"
                       << "<td>" << cGross << "</td>"
                       << "<td>" << c.sellFee << "</td>"
-                      << "<td>-</td><td>-</td><td>-</td><td>-</td>"
                       << "<td>-</td><td>-</td>"
                       << "<td class='" << (profit.netProfit >= 0 ? "buy" : "sell") << "'>"
                       << profit.netProfit << " (" << std::setprecision(2) << profit.roi << "%)" << std::setprecision(17) << "</td>"
@@ -146,7 +179,6 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
                   << "<td>" << s.value << "</td><td>" << s.quantity << "</td>"
                   << "<td>" << cGross << "</td>"
                   << "<td>" << s.sellFee << "</td>"
-                  << "<td>-</td><td>-</td><td>-</td><td>-</td>"
                   << "<td>-</td><td>-</td><td>-</td>"
                   << "<td>"
                   << "<a class='btn btn-sm' href='/edit-trade?id=" << s.tradeId << "'>Edit</a> "
@@ -281,78 +313,147 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
         res.set_redirect("/trades?msg=SL+now+" + state + "+for+" + std::to_string(id), 303);
     });
 
-    // ========== POST /set-sl-frac ==========
-    svr.Post("/set-sl-frac", [&](const httplib::Request& req, httplib::Response& res) {
+    // ========== POST /set-horizon-tp ==========
+    svr.Post("/set-horizon-tp", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto f = parseForm(req.body);
-        int id = fi(f, "id");
-        auto trades = db.loadTrades();
-        auto* tp = db.findTradeById(trades, id);
-        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
-        tp->stopLossFraction = fd(f, "frac");
-        if (tp->stopLossFraction < 0) tp->stopLossFraction = 0;
-        if (tp->stopLossFraction > 1) tp->stopLossFraction = 1;
-        tp->stopLossActive = (tp->stopLossFraction > 0.0);
-        db.updateTrade(*tp);
-        std::string state = tp->stopLossActive ? "ON" : "OFF";
-        res.set_redirect("/trades?msg=SL+frac=" + fv(f, "frac") + "+" + state + "+for+" + std::to_string(id), 303);
+        int tradeId = fi(f, "tradeId");
+        std::string sym = fv(f, "symbol");
+        int idx = fi(f, "index");
+        double tp = fd(f, "tp");
+        auto levels = db.loadHorizonLevels(sym, tradeId);
+        for (auto& lv : levels)
+            if (lv.index == idx) { lv.takeProfit = tp; break; }
+        db.saveHorizonLevels(sym, tradeId, levels);
+        res.set_redirect("/trades?msg=Horizon+TP+[" + std::to_string(idx) + "]+set+for+" + std::to_string(tradeId), 303);
     });
 
-    // ========== POST /set-tp ==========
-    svr.Post("/set-tp", [&](const httplib::Request& req, httplib::Response& res) {
+    // ========== POST /set-horizon-sl ==========
+    svr.Post("/set-horizon-sl", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto f = parseForm(req.body);
-        int id = fi(f, "id");
-        auto trades = db.loadTrades();
-        auto* t = db.findTradeById(trades, id);
-        if (!t) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
-        t->takeProfit = fd(f, "tp");
-        // if setting a TP value and fraction was 0, auto-set fraction to 1
-        if (t->takeProfit > 0 && t->takeProfitFraction <= 0)
-            t->takeProfitFraction = 1.0;
-        // if clearing TP value, zero the fraction
-        if (t->takeProfit <= 0)
-            t->takeProfitFraction = 0.0;
-        t->takeProfitActive = (t->takeProfitFraction > 0.0);
-        db.updateTrade(*t);
-        res.set_redirect("/trades?msg=TP+set+to+" + fv(f, "tp") + "+for+" + std::to_string(id), 303);
+        int tradeId = fi(f, "tradeId");
+        std::string sym = fv(f, "symbol");
+        int idx = fi(f, "index");
+        double sl = fd(f, "sl");
+        auto levels = db.loadHorizonLevels(sym, tradeId);
+        for (auto& lv : levels)
+            if (lv.index == idx) { lv.stopLoss = sl; break; }
+        db.saveHorizonLevels(sym, tradeId, levels);
+        res.set_redirect("/trades?msg=Horizon+SL+[" + std::to_string(idx) + "]+set+for+" + std::to_string(tradeId), 303);
     });
 
-    // ========== POST /set-tp-frac ==========
-    svr.Post("/set-tp-frac", [&](const httplib::Request& req, httplib::Response& res) {
+    // ========== POST /set-horizon-sl-active ==========
+    svr.Post("/set-horizon-sl-active", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto f = parseForm(req.body);
-        int id = fi(f, "id");
-        auto trades = db.loadTrades();
-        auto* tp = db.findTradeById(trades, id);
-        if (!tp) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
-        tp->takeProfitFraction = fd(f, "frac");
-        if (tp->takeProfitFraction < 0) tp->takeProfitFraction = 0;
-        if (tp->takeProfitFraction > 1) tp->takeProfitFraction = 1;
-        tp->takeProfitActive = (tp->takeProfitFraction > 0.0);
-        db.updateTrade(*tp);
-        std::string state = tp->takeProfitActive ? "ON" : "OFF";
-        res.set_redirect("/trades?msg=TP+frac=" + fv(f, "frac") + "+" + state + "+for+" + std::to_string(id), 303);
+        int tradeId = fi(f, "tradeId");
+        std::string sym = fv(f, "symbol");
+        int idx = fi(f, "index");
+        bool active = (fv(f, "active") == "1");
+        auto levels = db.loadHorizonLevels(sym, tradeId);
+        for (auto& lv : levels)
+            if (lv.index == idx) { lv.stopLossActive = active; break; }
+        db.saveHorizonLevels(sym, tradeId, levels);
+        std::string state = active ? "ON" : "OFF";
+        res.set_redirect("/trades?msg=Horizon+SL+[" + std::to_string(idx) + "]+" + state + "+for+" + std::to_string(tradeId), 303);
     });
 
-    // ========== POST /set-sl ==========
-    svr.Post("/set-sl", [&](const httplib::Request& req, httplib::Response& res) {
+    // ========== POST /set-exit-tp ==========
+    svr.Post("/set-exit-tp", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto f = parseForm(req.body);
-        int id = fi(f, "id");
-        auto trades = db.loadTrades();
-        auto* t = db.findTradeById(trades, id);
-        if (!t) { res.set_redirect("/trades?err=Trade+not+found", 303); return; }
-        t->stopLoss = fd(f, "sl");
-        // if setting a SL value and fraction was 0, auto-set fraction to 1
-        if (t->stopLoss > 0 && t->stopLossFraction <= 0)
-            t->stopLossFraction = 1.0;
-        // if clearing SL value, zero the fraction
-        if (t->stopLoss <= 0)
-            t->stopLossFraction = 0.0;
-        t->stopLossActive = (t->stopLossFraction > 0.0);
-        db.updateTrade(*t);
-        res.set_redirect("/trades?msg=SL+set+to+" + fv(f, "sl") + "+for+" + std::to_string(id), 303);
+        int exitId = fi(f, "exitId");
+        double tp = fd(f, "tp");
+        auto exits = db.loadExitPoints();
+        for (auto& xp : exits)
+            if (xp.exitId == exitId) { xp.tpPrice = tp; break; }
+        db.saveExitPoints(exits);
+        res.set_redirect("/trades?msg=Exit+TP+set+for+X" + std::to_string(exitId), 303);
+    });
+
+    // ========== POST /set-exit-sl ==========
+    svr.Post("/set-exit-sl", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int exitId = fi(f, "exitId");
+        double sl = fd(f, "sl");
+        auto exits = db.loadExitPoints();
+        for (auto& xp : exits)
+            if (xp.exitId == exitId) { xp.slPrice = sl; break; }
+        db.saveExitPoints(exits);
+        res.set_redirect("/trades?msg=Exit+SL+set+for+X" + std::to_string(exitId), 303);
+    });
+
+    // ========== POST /set-exit-qty ==========
+    svr.Post("/set-exit-qty", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int exitId = fi(f, "exitId");
+        double qty = fd(f, "qty");
+        auto exits = db.loadExitPoints();
+        for (auto& xp : exits)
+            if (xp.exitId == exitId) { xp.sellQty = qty; break; }
+        db.saveExitPoints(exits);
+        res.set_redirect("/trades?msg=Exit+qty+set+for+X" + std::to_string(exitId), 303);
+    });
+
+    // ========== POST /set-exit-sl-active ==========
+    svr.Post("/set-exit-sl-active", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int exitId = fi(f, "exitId");
+        bool active = (fv(f, "active") == "1");
+        auto exits = db.loadExitPoints();
+        for (auto& xp : exits)
+            if (xp.exitId == exitId) { xp.slActive = active; break; }
+        db.saveExitPoints(exits);
+        std::string state = active ? "ON" : "OFF";
+        res.set_redirect("/trades?msg=Exit+SL+" + state + "+for+X" + std::to_string(exitId), 303);
+    });
+
+    // ========== POST /delete-exit ==========
+    svr.Post("/delete-exit", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int exitId = fi(f, "exitId");
+        auto exits = db.loadExitPoints();
+        std::erase_if(exits, [exitId](const TradeDatabase::ExitPoint& xp) { return xp.exitId == exitId; });
+        db.saveExitPoints(exits);
+        db.releaseExitId(exitId);
+        res.set_redirect("/trades?msg=Exit+X" + std::to_string(exitId) + "+deleted", 303);
+    });
+
+    // ========== POST /add-exit ==========
+    svr.Post("/add-exit", [&](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lk(dbMutex);
+        auto f = parseForm(req.body);
+        int tradeId = fi(f, "tradeId");
+        std::string sym = fv(f, "symbol");
+        double tp = fd(f, "tp");
+        double sl = fd(f, "sl");
+        double qty = fd(f, "qty");
+        if (tp <= 0 || qty <= 0) { res.set_redirect("/trades?err=TP+and+qty+required", 303); return; }
+        auto exits = db.loadExitPoints();
+        // determine next level index for this trade
+        int maxIdx = -1;
+        for (const auto& xp : exits)
+            if (xp.tradeId == tradeId && xp.levelIndex > maxIdx) maxIdx = xp.levelIndex;
+        TradeDatabase::ExitPoint xp;
+        xp.exitId       = db.nextExitId();
+        xp.tradeId      = tradeId;
+        xp.symbol       = sym;
+        xp.levelIndex   = maxIdx + 1;
+        xp.tpPrice      = tp;
+        xp.slPrice      = sl;
+        xp.sellQty      = qty;
+        xp.sellFraction = 0.0;
+        xp.slActive     = (sl > 0);
+        xp.executed     = false;
+        xp.linkedSellId = -1;
+        exits.push_back(xp);
+        db.saveExitPoints(exits);
+        res.set_redirect("/trades?msg=Exit+X" + std::to_string(xp.exitId) + "+added+for+trade+" + std::to_string(tradeId), 303);
     });
 
     // ========== POST /execute-buy ==========

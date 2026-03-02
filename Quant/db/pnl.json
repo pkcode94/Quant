@@ -1,0 +1,50 @@
+[
+  {
+    "timestamp": 1772398769,
+    "symbol": "GOLD",
+    "sellTradeId": 2,
+    "parentTradeId": 1,
+    "entryPrice": 5146.2399999999998,
+    "sellPrice": 5249.1647999999996,
+    "quantity": 1.766270621329e-05,
+    "grossProfit": 0.0018179305044616267,
+    "netProfit": 0.0018179305044616267,
+    "cumProfit": 0.0018179305044616267
+  },
+  {
+    "timestamp": 1772398770,
+    "symbol": "GOLD",
+    "sellTradeId": 3,
+    "parentTradeId": 1,
+    "entryPrice": 5146.2399999999998,
+    "sellPrice": 5352.0896000000002,
+    "quantity": 0.00048233729378671002,
+    "grossProfit": 0.099288938991076964,
+    "netProfit": 0.099288938991076964,
+    "cumProfit": 0.10110686949553858
+  },
+  {
+    "timestamp": 1772398770,
+    "symbol": "GOLD",
+    "sellTradeId": 4,
+    "parentTradeId": 1,
+    "entryPrice": 5146.2399999999998,
+    "sellPrice": 5455.0144,
+    "quantity": 0.00048233729378671002,
+    "grossProfit": 0.14893340848661524,
+    "netProfit": 0.14893340848661524,
+    "cumProfit": 0.25004027798215384
+  },
+  {
+    "timestamp": 1772398770,
+    "symbol": "GOLD",
+    "sellTradeId": 5,
+    "parentTradeId": 1,
+    "entryPrice": 5146.2399999999998,
+    "sellPrice": 5557.9391999999998,
+    "quantity": 1.766270621328999e-05,
+    "grossProfit": 0.007271722017846519,
+    "netProfit": 0.007271722017846519,
+    "cumProfit": 0.25731200000000037
+  }
+]
