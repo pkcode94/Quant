@@ -366,3 +366,5 @@ FodyWeavers.xsd
 /ByBitBot/Program.cs
 /ByBitBot/QuantMath.cs
 /ByBitBot/TradingSession.cs
+/conf.d
+/flow
