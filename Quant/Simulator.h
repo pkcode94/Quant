@@ -129,7 +129,7 @@ struct SimResult
 
 class Simulator
 {
-    static constexpr double EPS = 1e-12;
+    static constexpr double EPS = 1e-15;
 
     // Per-trade state: the open position + its pre-computed exit plan
     struct OpenPosition

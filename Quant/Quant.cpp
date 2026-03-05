@@ -1992,7 +1992,7 @@ static void runSimulator(TradeDatabase& db)
 
     auto result = Simulator::run(cfg);
 
-    std::cout << std::fixed << std::setprecision(2);
+    std::cout << std::fixed << std::setprecision(17);
     std::cout << "\n  Simulation Results:\n";
     std::cout << "    Starting capital:  " << cfg.startingCapital << "\n";
     std::cout << "    Final capital:     " << result.finalCapital << "\n";

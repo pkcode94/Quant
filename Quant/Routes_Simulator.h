@@ -275,7 +275,7 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
 
         // Render results
         std::ostringstream h;
-        h << std::fixed << std::setprecision(8);
+        h << std::fixed << std::setprecision(17);
         h << "<h1>&#9881; Simulation Results</h1>";
         h << "<h2>" << html::esc(symbol) << "</h2>";
 
@@ -395,9 +395,9 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
             {
                 const auto& s = result.snapshots[i];
                 if (unique.empty()
-                    || std::abs(s.capital  - unique.back()->capital)  > 1e-10
-                    || std::abs(s.deployed - unique.back()->deployed) > 1e-10
-                    || std::abs(s.realized - unique.back()->realized) > 1e-10
+                    || std::abs(s.capital  - unique.back()->capital)  > 1e-15
+                    || std::abs(s.deployed - unique.back()->deployed) > 1e-15
+                    || std::abs(s.realized - unique.back()->realized) > 1e-15
                     || s.openTrades != unique.back()->openTrades)
                 {
                     unique.push_back(&s);
@@ -413,16 +413,7 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
             for (const auto* sp : unique)
             {
                 const auto& s = *sp;
-                std::time_t tt = static_cast<std::time_t>(s.timestamp);
-                std::tm tm;
-#ifdef _WIN32
-                localtime_s(&tm, &tt);
-#else
-                localtime_r(&tt, &tm);
-#endif
-                char tbuf[32];
-                std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M", &tm);
-                h << "<tr><td>" << tbuf << "</td>"
+                h << "<tr><td>" << html::fmtTime(s.timestamp) << "</td>"
                   << "<td>" << s.capital << "</td>"
                   << "<td>" << s.deployed << "</td>"
                   << "<td>" << (s.capital + s.deployed) << "</td>"
@@ -487,8 +478,8 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
             for (const auto& s : result.snapshots)
             {
                 if (!firstSnap
-                    && std::abs(s.capital - prevCap) < 1e-10
-                    && std::abs(s.deployed - prevDep) < 1e-10)
+                    && std::abs(s.capital - prevCap) < 1e-15
+                    && std::abs(s.deployed - prevDep) < 1e-15)
                     continue;
                 if (!firstSnap) h << ',';
                 h << "{t:" << s.timestamp

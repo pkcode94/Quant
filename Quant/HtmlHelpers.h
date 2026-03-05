@@ -21,15 +21,47 @@
 namespace html {
 
 // Format unix timestamp to "YYYY-MM-DD HH:MM" or "-" if 0.
+// Handles negative timestamps (pre-1970) safely on Windows where
+// localtime_s does not support them.
 inline std::string fmtTime(long long ts)
 {
-    if (ts <= 0) return "-";
+    if (ts == 0) return "-";
     std::time_t tt = static_cast<std::time_t>(ts);
-    std::tm tm;
+    std::tm tm{};
 #ifdef _WIN32
-    localtime_s(&tm, &tt);
+    if (tt < 0) {
+        // MSVC localtime_s rejects negative time_t; format manually.
+        // Convert negative unix timestamp to calendar date.
+        long long secs = ts;
+        // days since epoch (round toward negative infinity)
+        long long days = secs / 86400;
+        long long dayRem = secs % 86400;
+        if (dayRem < 0) { days--; dayRem += 86400; }
+        int hh = static_cast<int>(dayRem / 3600);
+        int mm = static_cast<int>((dayRem % 3600) / 60);
+        // Convert days since 1970-01-01 to Y/M/D (civil_from_days)
+        long long z = days + 719468; // shift to 0000-03-01 epoch
+        long long era = (z >= 0 ? z : z - 146096) / 146097;
+        long long doe = z - era * 146097;
+        long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        long long y = yoe + era * 400;
+        long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        long long mp = (5 * doy + 2) / 153;
+        int d = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+        int m = static_cast<int>(mp + (mp < 10 ? 3 : -9));
+        if (m <= 2) y++;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%04lld-%02d-%02d %02d:%02d",
+                      y, m, d, hh, mm);
+        return buf;
+    }
+    if (localtime_s(&tm, &tt) != 0) {
+        return std::to_string(ts);
+    }
 #else
-    localtime_r(&tt, &tm);
+    if (!localtime_r(&tt, &tm)) {
+        return std::to_string(ts);
+    }
 #endif
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
@@ -41,11 +73,11 @@ inline std::string fmtDatetimeLocal(long long ts)
 {
     if (ts <= 0) return "";
     std::time_t tt = static_cast<std::time_t>(ts);
-    std::tm tm;
+    std::tm tm{};
 #ifdef _WIN32
-    localtime_s(&tm, &tt);
+    if (localtime_s(&tm, &tt) != 0) return "";
 #else
-    localtime_r(&tt, &tm);
+    if (!localtime_r(&tt, &tm)) return "";
 #endif
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M", &tm);
