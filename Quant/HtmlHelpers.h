@@ -3,6 +3,11 @@
 #include "Trade.h"
 #include "ProfitCalculator.h"
 #include "MultiHorizonEngine.h"
+
+#ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
+#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 65536
+#endif
+
 #include "cpp-httplib-master\httplib.h"
 
 #include <string>
