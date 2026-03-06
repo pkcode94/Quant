@@ -224,6 +224,7 @@ inline std::string nav()
         "<a href='/param-models'>Models</a>"
         "<a href='/pnl' style='color:#22c55e;'>&#9654; P&amp;L</a>"
         "<a href='/simulator' style='color:#38bdf8;'>&#9881; Simulator</a>"
+        "<a href='/optimizer' style='color:#a78bfa;'>&#8711; BPTT</a>"
         "<a href='/chart' style='color:#c9a44a;font-weight:bold;'>&#9733; Chart</a>"
         "<a href='/premium' style='color:#c9a44a;'>&#9733; Premium</a>"
         "<a href='/admin' style='color:#7b97c4;'>Admin</a>"
@@ -334,6 +335,16 @@ inline std::string wrap(const std::string& title, const std::string& body)
            "<title>" + esc(title) + " - Quant</title>" + css() +
            "</head><body>" + nav() +
            "<div class='container'>" + body + "</div></body></html>";
+}
+
+// Streaming variant: returns the opening HTML up to the body container.
+// Caller must eventually send "</div></body></html>" to close.
+inline std::string wrapOpen(const std::string& title)
+{
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+           "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+           "<title>" + esc(title) + " - Quant</title>" + css() +
+           "</head><body>" + nav() + "<div class='container'>";
 }
 
 inline std::string msgBanner(const httplib::Request& req)

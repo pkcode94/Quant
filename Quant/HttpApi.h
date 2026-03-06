@@ -20,7 +20,9 @@
 #include "Routes_Admin.h"
 #include "Routes_Premium.h"
 #include "Routes_Simulator.h"
+#include "Routes_Optimizer.h"
 #include "Routes_Symbols.h"
+#include "CudaAccelerator.h"
 
 #include <mutex>
 #include <thread>
@@ -45,6 +47,12 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     }
 
     AppContext ctx{ users, dbMutex, db, config, symbols, prices };
+
+    // Initialize CUDA if available
+    if (CudaAccelerator::init())
+        std::cout << "  [CUDA] GPU detected: " << CudaAccelerator::deviceName() << "\n";
+    else
+        std::cout << "  [CUDA] No GPU detected — optimizer will use CPU\n";
 
     httplib::Server svr;
 
@@ -85,6 +93,7 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     registerAdminRoutes(svr, ctx);
     registerPremiumRoutes(svr, ctx);
     registerSimulatorRoutes(svr, ctx);
+    registerOptimizerRoutes(svr, ctx);
     registerSymbolRoutes(svr, ctx);
 
     std::cout << "  [HTTP] listening on http://localhost:" << port << "\n";

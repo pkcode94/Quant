@@ -237,7 +237,8 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
         cfg.chainCycles                             = (fv(f, "chainCycles") == "1");
         cfg.savingsRate                             = fd(f, "savingsRate");
 
-        // Parse price series
+        // Parse price series into a local PriceSeries (SimConfig holds a pointer)
+        PriceSeries localPrices;
         std::string priceStr = fv(f, "priceSeries");
         {
             std::istringstream ss(priceStr);
@@ -253,13 +254,14 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
                 {
                     long long ts = std::stoll(line.substr(0, comma));
                     double px    = std::stod(line.substr(comma + 1));
-                    cfg.prices.set(symbol, ts, px);
+                    localPrices.set(symbol, ts, px);
                 }
                 catch (...) {}
             }
         }
+        cfg.prices = &localPrices;
 
-        if (!cfg.prices.hasSymbol(symbol))
+        if (!localPrices.hasSymbol(symbol))
         {
             res.set_redirect("/simulator?err=No+valid+price+data+entered", 303);
             return;
@@ -428,7 +430,7 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
         // ============= INTERACTIVE CHARTS =============
         // Serialize data to JSON for the JavaScript charts
         {
-            const auto& pts = cfg.prices.data().at(symbol);
+            const auto& pts = cfg.prices->data().at(symbol);
 
             // Price series JSON
             h << "\n<script>\nvar simPrices=[";
@@ -468,6 +470,22 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
                   << ",gp:" << s.grossProfit
                   << ",np:" << s.netProfit
                   << ",t:" << s.sellTime << "}";
+            }
+            h << "];\n";
+
+            // Entry levels JSON (all planned levels, filled & unfilled)
+            h << "var simLevels=[";
+            for (size_t i = 0; i < result.entryLevels.size(); ++i)
+            {
+                if (i > 0) h << ',';
+                const auto& el = result.entryLevels[i];
+                h << "{c:" << el.cycle
+                  << ",i:" << el.levelIndex
+                  << ",p:" << el.entryPrice
+                  << ",f:" << el.funding
+                  << ",gt:" << el.generatedAt
+                  << ",hit:" << (el.filled ? 1 : 0)
+                  << ",ht:" << el.filledAt << "}";
             }
             h << "];\n";
 
@@ -540,6 +558,8 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
              "<span><i style='background:#38bdf8'></i> Price</span>"
              "<span><i style='background:#22c55e'></i> Buy</span>"
              "<span><i style='background:#ef4444'></i> Sell</span>"
+             "<span><i style='background:#3b82f6'></i> Entry Level (hit)</span>"
+             "<span><i style='background:#3b82f6;opacity:0.3'></i> Entry Level (pending)</span>"
              "<span><i style='background:#60a5fa'></i> Capital</span>"
              "<span><i style='background:#c9a44a'></i> Deployed</span>"
              "<span><i style='background:#a78bfa'></i> Total</span>"
@@ -593,6 +613,7 @@ function drawPrice(){
   // include entry/sell prices in range
   simEntries.forEach(function(e){if(e.e<pMin)pMin=e.e;if(e.e>pMax)pMax=e.e;});
   simSells.forEach(function(s){if(s.sp<pMin)pMin=s.sp;if(s.sp>pMax)pMax=s.sp;});
+  if(typeof simLevels!=='undefined')simLevels.forEach(function(lv){if(lv.p<pMin)pMin=lv.p;if(lv.p>pMax)pMax=lv.p;});
   var pad=(pMax-pMin)*0.08||1;pMin-=pad;pMax+=pad;
 
   var tx=function(t){return PAD_L+(t-tMin)/(tMax-tMin)*(W-PAD_L-PAD_R);};
@@ -604,6 +625,28 @@ function drawPrice(){
   ctx.strokeStyle='#38bdf8';ctx.lineWidth=1.5;ctx.beginPath();
   ps.forEach(function(p,i){var x=tx(p.t),y=py(p.p);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
   ctx.stroke();
+
+  // entry level lines (only show levels that were actually hit)
+  var ccol=['#3b82f6','#8b5cf6','#06b6d4','#f59e0b','#ec4899','#10b981'];
+  if(typeof simLevels!=='undefined'&&simLevels.length){
+    simLevels.forEach(function(lv){
+      if(!lv.hit)return;
+      var yy=py(lv.p);
+      if(yy<PAD_T||yy>H-PAD_B)return;
+      var x1=tx(lv.gt);
+      var x2=tx(lv.ht);
+      var col=ccol[lv.c%ccol.length];
+      ctx.save();
+      ctx.strokeStyle=col;ctx.globalAlpha=0.6;ctx.lineWidth=1.5;ctx.setLineDash([]);
+      ctx.beginPath();ctx.moveTo(x1,yy);ctx.lineTo(x2,yy);ctx.stroke();
+      ctx.globalAlpha=0.9;ctx.fillStyle=col;
+      ctx.beginPath();ctx.moveTo(x2,yy-5);ctx.lineTo(x2+5,yy);ctx.lineTo(x2,yy+5);ctx.lineTo(x2-5,yy);ctx.closePath();ctx.fill();
+      ctx.globalAlpha=0.8;ctx.fillStyle=col;
+      ctx.font='8px monospace';ctx.textAlign='left';
+      ctx.fillText('C'+lv.c+'L'+lv.i+' '+fp(lv.p),x1+3,yy-3);
+      ctx.restore();
+    });
+  }
 
   // entry markers (green triangles)
   simEntries.forEach(function(e){
@@ -809,6 +852,10 @@ function setupTooltip(tx,vy,tMin,tMax,vMin,vMax,mode){
       // nearby entries
       simEntries.forEach(function(e){if(Math.abs(tx(e.t)-mx)<15)lines+='BUY #'+e.id+' @ '+fp(e.e)+' qty='+fp(e.q)+'\n';});
       simSells.forEach(function(s){if(Math.abs(tx(s.t)-mx)<15)lines+='SELL #'+s.bid+' @ '+fp(s.sp)+' net='+fp(s.np)+'\n';});
+      // nearby entry levels (within 8px vertically)
+      if(typeof simLevels!=='undefined')simLevels.forEach(function(lv){
+        var ly=vy(lv.p);if(Math.abs(ly-my)<8)lines+='C'+lv.c+'L'+lv.i+' @ '+fp(lv.p)+(lv.hit?' HIT':' pending')+'\n';
+      });
     } else if(mode==='capital'){
       var snap=findSnap(t);
       if(snap){lines+='Liquid: '+fp(snap.c)+'\nDeployed: '+fp(snap.d)+'\nTotal: '+fp(snap.c+snap.d)+'\nRealized: '+fp(snap.r)+'\nOpen: '+snap.o;}

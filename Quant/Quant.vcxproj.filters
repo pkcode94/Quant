@@ -113,5 +113,11 @@
     <ClInclude Include="json.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="Routes_Symbols.h">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="CudaKernels.cu" />
   </ItemGroup>
 </Project>

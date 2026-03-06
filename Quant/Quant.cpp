@@ -1967,16 +1967,18 @@ static void chainMenu(TradeDatabase& db)
 
 static void runSimulator(TradeDatabase& db)
 {
-    SimConfig cfg;
-    cfg.symbol          = readSymbol("  Symbol: ");
-    cfg.startingCapital = readDouble("  Starting capital: ");
+SimConfig cfg;
+cfg.symbol          = readSymbol("  Symbol: ");
+cfg.startingCapital = readDouble("  Starting capital: ");
 
-    int priceCount = readInt("  Number of price points: ");
-    for (int i = 0; i < priceCount; ++i)
-    {
-        double p = readDouble("    Price " + std::to_string(i + 1) + ": ");
-        cfg.prices.set(cfg.symbol, static_cast<long long>(i + 1), p);
-    }
+PriceSeries localPrices;
+int priceCount = readInt("  Number of price points: ");
+for (int i = 0; i < priceCount; ++i)
+{
+    double p = readDouble("    Price " + std::to_string(i + 1) + ": ");
+    localPrices.set(cfg.symbol, static_cast<long long>(i + 1), p);
+}
+cfg.prices = &localPrices;
 
     cfg.horizonParams = readHorizonParams("  Entry levels: ");
     cfg.entryRisk     = readDouble("  Entry risk (0-1): ");
