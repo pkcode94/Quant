@@ -278,7 +278,8 @@ __global__ void batchSimKernel(
         cycCap[0] = capital;
 
         // __ldg: read-only data cache path for price series
-        numEntries = gpu_generateEntries(cfg, __ldg(&prices[0]), capital, entries);
+        double entryRefPrice = __ldg(&prices[0]);
+        numEntries = gpu_generateEntries(cfg, entryRefPrice, capital, entries);
         for (int i = 0; i < numEntries; ++i) entryFilled[i] = false;
 
         // ---- Main price loop ----
@@ -286,11 +287,16 @@ __global__ void batchSimKernel(
         {
             double price = __ldg(&prices[pi]);
 
-            // --- entries: strict < prevents instant fill at generation price ---
+            // --- entries: limit buys fill on drop, breakout buys fill on rise ---
             for (int ei = 0; ei < numEntries; ++ei)
             {
                 if (entryFilled[ei]) continue;
-                if (price >= entries[ei].entryPrice) continue;
+                bool belowRef = (entries[ei].entryPrice <= entryRefPrice);
+                if (belowRef) {
+                    if (price >= entries[ei].entryPrice) continue;  // limit: wait for drop
+                } else {
+                    if (price <= entries[ei].entryPrice) continue;  // breakout: wait for rise
+                }
                 if (entries[ei].qty < 1e-15 || numPos >= GPU_MAX_POSITIONS) continue;
                 double cost = entries[ei].entryPrice * entries[ei].qty;
                 double fee  = cost * cfg.buyFeeRate;
@@ -344,6 +350,7 @@ __global__ void batchSimKernel(
                     if (cycle < GPU_MAX_CYCLES) cycCap[cycle] = capital;
                     if (cycle > maxCyc) maxCyc = cycle;
                     numEntries = gpu_generateEntries(cfg, price, capital, entries);
+                    entryRefPrice = price;
                     for (int i = 0; i < numEntries; ++i) entryFilled[i] = false;
                 }
             }

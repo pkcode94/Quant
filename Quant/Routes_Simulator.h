@@ -559,10 +559,14 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
              "<span><i style='background:#22c55e'></i> Buy</span>"
              "<span><i style='background:#ef4444'></i> Sell</span>"
              "<span><i style='background:#3b82f6'></i> Entry Level (hit)</span>"
-             "<span><i style='background:#3b82f6;opacity:0.3'></i> Entry Level (pending)</span>"
-             "<span><i style='background:#60a5fa'></i> Capital</span>"
-             "<span><i style='background:#c9a44a'></i> Deployed</span>"
-             "<span><i style='background:#a78bfa'></i> Total</span>"
+             "</div>";
+
+        // In-page trade log console
+        h << "<div style='margin-top:12px;'>"
+             "<h3 style='margin-bottom:6px;'>Trade Log</h3>"
+             "<div id='simLog' style='background:#0a0f1a;border:1px solid #1a2744;border-radius:6px;"
+             "padding:10px;font-family:monospace;font-size:0.78em;color:#94a3b8;"
+             "max-height:300px;overflow-y:auto;white-space:pre;line-height:1.6;'></div>"
              "</div>";
 
         // Chart JavaScript
@@ -610,10 +614,9 @@ function drawPrice(){
   if(tMax<=tMin)tMax=tMin+1;
   var prices=ps.map(function(p){return p.p;});
   var pMin=Math.min.apply(null,prices),pMax=Math.max.apply(null,prices);
-  // include entry/sell prices in range
+  // include entry and exit prices in range
   simEntries.forEach(function(e){if(e.e<pMin)pMin=e.e;if(e.e>pMax)pMax=e.e;});
   simSells.forEach(function(s){if(s.sp<pMin)pMin=s.sp;if(s.sp>pMax)pMax=s.sp;});
-  if(typeof simLevels!=='undefined')simLevels.forEach(function(lv){if(lv.p<pMin)pMin=lv.p;if(lv.p>pMax)pMax=lv.p;});
   var pad=(pMax-pMin)*0.08||1;pMin-=pad;pMax+=pad;
 
   var tx=function(t){return PAD_L+(t-tMin)/(tMax-tMin)*(W-PAD_L-PAD_R);};
@@ -648,8 +651,12 @@ function drawPrice(){
     });
   }
 
-  // entry markers (green triangles)
+  // entry markers (green triangles) — only where price actually hit the level
+  var logEl=document.getElementById('simLog');
+  var log='=== Entries ('+simEntries.length+' trades) ===\n';
   simEntries.forEach(function(e){
+    var dt=new Date(e.t*1000);
+    log+='BUY #'+e.id+'  price='+fp(e.e)+'  qty='+fp(e.q)+'  remaining='+fp(e.r)+'  '+dt.toISOString().slice(0,10)+'\n';
     var x=tx(e.t),y=py(e.e);
     ctx.fillStyle='#22c55e';ctx.beginPath();
     ctx.moveTo(x,y+8);ctx.lineTo(x-5,y+16);ctx.lineTo(x+5,y+16);ctx.closePath();ctx.fill();
@@ -657,8 +664,11 @@ function drawPrice(){
     ctx.fillText('#'+e.id+' '+fp(e.e),x,y+25);
   });
 
-  // sell markers (red triangles, pointing down)
+  // sell markers (red triangles) + log
+  log+='\n=== Exits ('+simSells.length+' sells) ===\n';
   simSells.forEach(function(s){
+    var dt=new Date(s.t*1000);
+    log+='SELL buy#'+s.bid+'  entry='+fp(s.ep)+'  exit='+fp(s.sp)+'  qty='+fp(s.q)+'  net='+fp(s.np)+'  '+dt.toISOString().slice(0,10)+'\n';
     var x=tx(s.t),y=py(s.sp);
     ctx.fillStyle=s.np>=0?'#ef4444':'#f59e0b';ctx.beginPath();
     ctx.moveTo(x,y-8);ctx.lineTo(x-5,y-16);ctx.lineTo(x+5,y-16);ctx.closePath();ctx.fill();
@@ -666,25 +676,16 @@ function drawPrice(){
     ctx.fillText(fp(s.sp),x,y-20);
   });
 
-  // horizon lines: for each entry, draw dashed TP lines at exit trigger prices
-  simSells.forEach(function(s){
-    // draw a thin dashed line at the TP price across the trade's lifetime
-    var buyEntry=simEntries.find(function(e){return e.id===s.bid;});
-    if(!buyEntry)return;
-    var x1=tx(buyEntry.t),x2=tx(s.t),yy=py(s.sp);
-    ctx.save();ctx.strokeStyle='#22c55e44';ctx.lineWidth=1;ctx.setLineDash([4,3]);
-    ctx.beginPath();ctx.moveTo(x1,yy);ctx.lineTo(x2,yy);ctx.stroke();ctx.restore();
-  });
+  // entry level summary
+  if(typeof simLevels!=='undefined'&&simLevels.length){
+    var hitCount=0;simLevels.forEach(function(lv){if(lv.hit)hitCount++;});
+    log+='\n=== Entry Levels ('+simLevels.length+' planned, '+hitCount+' hit) ===\n';
+    simLevels.forEach(function(lv){
+      log+='C'+lv.c+'L'+lv.i+'  price='+fp(lv.p)+'  funding='+fp(lv.f)+'  '+(lv.hit?'HIT':'pending')+'\n';
+    });
+  }
 
-  // draw entry price lines across the holding period
-  simEntries.forEach(function(e){
-    var lastSell=0;
-    simSells.forEach(function(s){if(s.bid===e.id&&s.t>lastSell)lastSell=s.t;});
-    var endT=lastSell||tMax;
-    var x1=tx(e.t),x2=tx(endT),yy=py(e.e);
-    ctx.save();ctx.strokeStyle='#60a5fa33';ctx.lineWidth=1;ctx.setLineDash([6,4]);
-    ctx.beginPath();ctx.moveTo(x1,yy);ctx.lineTo(x2,yy);ctx.stroke();ctx.restore();
-  });
+  if(logEl)logEl.textContent=log;
 
   setupTooltip(tx,py,tMin,tMax,pMin,pMax,'price');
 }

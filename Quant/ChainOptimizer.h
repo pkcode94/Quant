@@ -52,6 +52,15 @@ enum class ChainObjective
     MaxWealth  = 5
 };
 
+struct ParamBound
+{
+    double lower  = -1e15;
+    double upper  =  1e15;
+    bool   frozen = false;
+
+    double clamp(double v) const { return std::max(lower, std::min(upper, v)); }
+};
+
 struct ChainParams
 {
     double price         = 0.0;
@@ -67,6 +76,14 @@ struct ChainParams
     double maxRisk       = 0.0;
     double minRisk       = 0.0;
     double savingsRate   = 0.05;
+
+    // Per-parameter optimisation bounds (non-negotiable limits + freeze toggle)
+    ParamBound bSurplus     {0.0,  1.0, false};
+    ParamBound bRisk        {0.0,  1.0, false};
+    ParamBound bSteepness   {0.1, 50.0, false};
+    ParamBound bFeeHedging  {0.1, 10.0, false};
+    ParamBound bMaxRisk     {0.0,  1.0, false};
+    ParamBound bSavingsRate {0.0,  1.0, false};
 
     // Fixed parameters
     double feeSpread     = 0.001;
@@ -112,6 +129,8 @@ struct LevelRecord
     double buyFee       = 0.0;
     double sellFee      = 0.0;
     double netProfit    = 0.0;
+    long long entryTime = 0;     // unix timestamp of buy fill  (0 = analytical mode)
+    long long sellTime  = 0;     // unix timestamp of sell fill (0 = still open)
 };
 
 struct CycleRecord
@@ -260,6 +279,28 @@ class ChainOptimizer
                   << "\n";
 
         if (onStep) onStep(sr);
+    }
+
+    // ---- Apply non-negotiable bounds to all optimisable parameters ----
+    static void applyBounds(ChainParams& cur)
+    {
+        cur.surplus     = cur.bSurplus.clamp(cur.surplus);
+        cur.risk        = cur.bRisk.clamp(cur.risk);
+        cur.steepness   = cur.bSteepness.clamp(cur.steepness);
+        cur.feeHedging  = cur.bFeeHedging.clamp(cur.feeHedging);
+        cur.maxRisk     = cur.bMaxRisk.clamp(cur.maxRisk);
+        cur.savingsRate = cur.bSavingsRate.clamp(cur.savingsRate);
+    }
+
+    // ---- Zero out gradients for frozen (non-learnable) parameters ----
+    static void zeroFrozenGrads(const ChainParams& p, ParamGradients& g)
+    {
+        if (p.bSurplus.frozen)     g.dJ_dSurplus     = 0;
+        if (p.bRisk.frozen)        g.dJ_dRisk        = 0;
+        if (p.bSteepness.frozen)   g.dJ_dSteepness   = 0;
+        if (p.bFeeHedging.frozen)  g.dJ_dFeeHedging  = 0;
+        if (p.bMaxRisk.frozen)     g.dJ_dMaxRisk     = 0;
+        if (p.bSavingsRate.frozen) g.dJ_dSavingsRate = 0;
     }
 
     // ---- Build HorizonParams from ChainParams ----
@@ -547,12 +588,30 @@ class ChainOptimizer
                 lr.quantity   = t.quantity;
                 lr.funding    = t.entryPrice * t.quantity;
                 lr.buyFee     = t.buyFee;
+                lr.entryTime  = t.entryTime;
+
+                // Compute overhead and effective overhead (simulator uses entryCost as portfolioPump)
+                double entryCost = t.entryPrice * t.quantity;
+                lr.overhead = QuantMath::overhead(
+                    t.entryPrice, t.quantity,
+                    p.feeSpread, p.feeHedging, p.deltaTime,
+                    p.symbolCount, entryCost, p.coefficientK,
+                    p.futureTradeCount);
+                lr.effectiveOH = QuantMath::effectiveOverhead(
+                    lr.overhead, p.surplus, p.feeSpread,
+                    p.feeHedging, p.deltaTime);
+
+                // Default target TP from overhead formula
+                lr.tpPrice = t.entryPrice * (1.0 + lr.effectiveOH);
+
+                // Override with actual sell data if the position was closed
                 for (const auto& s : result.sells) {
                     if (s.buyId == t.id) {
                         lr.tpPrice     = s.sellPrice;
                         lr.sellFee     = s.sellFee;
                         lr.grossProfit = s.grossProfit;
                         lr.netProfit   = s.netProfit;
+                        lr.sellTime    = s.sellTime;
                     }
                 }
                 cr.levels.push_back(lr);
@@ -940,14 +999,17 @@ private:
                                           const StepCallback& onStep = nullptr)
     {
         OptimizationResult res;
-        res.initialParams = initial;
+        ChainParams init = initial;
+        applyBounds(init);
+        res.initialParams = init;
 
-        auto grad = simGradients(initial, obj);
+        auto grad = simGradients(init, obj);
+        zeroFrozenGrads(init, grad);
         res.initialGradients = grad;
         res.objectiveHistory.push_back(grad.objective);
-        recordStep(res, 0, initial, grad, obj, onStep);
+        recordStep(res, 0, init, grad, obj, onStep);
 
-        ChainParams cur = initial;
+        ChainParams cur = init;
         double sign = (obj == ChainObjective::MinSpread) ? -1.0 : 1.0;
 
         struct Adam { double m = 0, v = 0; };
@@ -967,21 +1029,23 @@ private:
             double bc2 = 1.0 / (1.0 - std::pow(beta2, t));
             double adjLR = lr * std::sqrt(bc2) * bc1;
 
-            cur.surplus    += sign * adamStep(a_s,  grad.dJ_dSurplus,     adjLR);
-            cur.risk       += sign * adamStep(a_r,  grad.dJ_dRisk,        adjLR * 0.1);
-            cur.steepness  += sign * adamStep(a_a,  grad.dJ_dSteepness,   adjLR * 0.01);
-            cur.feeHedging += sign * adamStep(a_fh, grad.dJ_dFeeHedging,  adjLR * 0.1);
-            cur.maxRisk    += sign * adamStep(a_rm, grad.dJ_dMaxRisk,     adjLR);
-            cur.savingsRate += sign * adamStep(a_sv, grad.dJ_dSavingsRate, adjLR * 0.1);
+            if (!cur.bSurplus.frozen)
+                cur.surplus    += sign * adamStep(a_s,  grad.dJ_dSurplus,     adjLR);
+            if (!cur.bRisk.frozen)
+                cur.risk       += sign * adamStep(a_r,  grad.dJ_dRisk,        adjLR * 0.1);
+            if (!cur.bSteepness.frozen)
+                cur.steepness  += sign * adamStep(a_a,  grad.dJ_dSteepness,   adjLR * 0.01);
+            if (!cur.bFeeHedging.frozen)
+                cur.feeHedging += sign * adamStep(a_fh, grad.dJ_dFeeHedging,  adjLR * 0.1);
+            if (!cur.bMaxRisk.frozen)
+                cur.maxRisk    += sign * adamStep(a_rm, grad.dJ_dMaxRisk,     adjLR);
+            if (!cur.bSavingsRate.frozen)
+                cur.savingsRate += sign * adamStep(a_sv, grad.dJ_dSavingsRate, adjLR * 0.1);
 
-            cur.surplus     = std::max(0.0, cur.surplus);
-            cur.risk        = QuantMath::clamp01(cur.risk);
-            cur.steepness   = std::max(0.1, cur.steepness);
-            cur.feeHedging  = std::max(0.1, cur.feeHedging);
-            cur.maxRisk     = std::max(0.0, cur.maxRisk);
-            cur.savingsRate = QuantMath::clamp01(cur.savingsRate);
+            applyBounds(cur);
 
             grad = simGradients(cur, obj);
+            zeroFrozenGrads(cur, grad);
             res.objectiveHistory.push_back(grad.objective);
             res.steps = step + 1;
             recordStep(res, step + 1, cur, grad, obj, onStep);
@@ -1009,16 +1073,19 @@ private:
                                                   const StepCallback& onStep = nullptr)
     {
         OptimizationResult res;
-        res.initialParams = initial;
+        ChainParams init = initial;
+        applyBounds(init);
+        res.initialParams = init;
 
         // Initial forward + backward
-        auto trace = forward(initial);
-        auto grad  = backward(initial, trace, obj);
+        auto trace = forward(init);
+        auto grad  = backward(init, trace, obj);
+        zeroFrozenGrads(init, grad);
         res.initialGradients = grad;
         res.objectiveHistory.push_back(grad.objective);
-        recordStep(res, 0, initial, grad, obj, onStep);
+        recordStep(res, 0, init, grad, obj, onStep);
 
-        ChainParams cur = initial;
+        ChainParams cur = init;
 
         // Ascent for Max objectives, descent for Min
         double sign = (obj == ChainObjective::MinSpread) ? -1.0 : 1.0;
@@ -1041,23 +1108,25 @@ private:
             double bc2 = 1.0 / (1.0 - std::pow(beta2, t));
             double adjLR = lr * std::sqrt(bc2) * bc1;
 
-            cur.surplus    += sign * adamStep(a_s,  grad.dJ_dSurplus,     adjLR);
-            cur.risk       += sign * adamStep(a_r,  grad.dJ_dRisk,        adjLR * 0.1);
-            cur.steepness  += sign * adamStep(a_a,  grad.dJ_dSteepness,   adjLR * 0.01);
-            cur.feeHedging += sign * adamStep(a_fh, grad.dJ_dFeeHedging,  adjLR * 0.1);
-            cur.maxRisk    += sign * adamStep(a_rm, grad.dJ_dMaxRisk,     adjLR);
-            cur.savingsRate += sign * adamStep(a_sv, grad.dJ_dSavingsRate, adjLR * 0.1);
+            if (!cur.bSurplus.frozen)
+                cur.surplus    += sign * adamStep(a_s,  grad.dJ_dSurplus,     adjLR);
+            if (!cur.bRisk.frozen)
+                cur.risk       += sign * adamStep(a_r,  grad.dJ_dRisk,        adjLR * 0.1);
+            if (!cur.bSteepness.frozen)
+                cur.steepness  += sign * adamStep(a_a,  grad.dJ_dSteepness,   adjLR * 0.01);
+            if (!cur.bFeeHedging.frozen)
+                cur.feeHedging += sign * adamStep(a_fh, grad.dJ_dFeeHedging,  adjLR * 0.1);
+            if (!cur.bMaxRisk.frozen)
+                cur.maxRisk    += sign * adamStep(a_rm, grad.dJ_dMaxRisk,     adjLR);
+            if (!cur.bSavingsRate.frozen)
+                cur.savingsRate += sign * adamStep(a_sv, grad.dJ_dSavingsRate, adjLR * 0.1);
 
-            // Clamp to valid ranges
-            cur.surplus     = std::max(0.0, cur.surplus);
-            cur.risk        = QuantMath::clamp01(cur.risk);
-            cur.steepness   = std::max(0.1, cur.steepness);
-            cur.feeHedging  = std::max(0.1, cur.feeHedging);
-            cur.maxRisk     = std::max(0.0, cur.maxRisk);
-            cur.savingsRate = QuantMath::clamp01(cur.savingsRate);
+            // Clamp to non-negotiable bounds
+            applyBounds(cur);
 
             trace = forward(cur);
             grad  = backward(cur, trace, obj);
+            zeroFrozenGrads(cur, grad);
             res.objectiveHistory.push_back(grad.objective);
 
             res.steps = step + 1;

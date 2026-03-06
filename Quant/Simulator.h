@@ -158,12 +158,14 @@ class Simulator
     {
         std::vector<EntryLevel> levels;
         std::vector<bool>       filled;
+        double                  referencePrice = 0.0;  // price at generation time
     };
 
     static CycleEntries generateCycleEntries(double price, double capital,
                                              const SimConfig& cfg)
     {
         CycleEntries ce;
+        ce.referencePrice = price;
         HorizonParams ep = cfg.horizonParams;
         ep.portfolioPump = capital;
 
@@ -227,13 +229,19 @@ public:
             long long now   = pts[pi].timestamp;
             double    price = pts[pi].price;
 
-            // --- Check entries: buy when price drops below entry level ---
-            // Strict < prevents instant fill at the generation price while
-            // still triggering on any actual price dip.
+            // --- Check entries ---
+            // Limit buys (at or below reference): fill when price drops below entry.
+            // Breakout buys (above reference): fill when price rises above entry.
             for (size_t ei = 0; ei < ce.levels.size(); ++ei)
             {
                 if (ce.filled[ei]) continue;
-                if (price >= ce.levels[ei].entryPrice) continue;
+
+                bool belowRef = (ce.levels[ei].entryPrice <= ce.referencePrice);
+                if (belowRef) {
+                    if (price >= ce.levels[ei].entryPrice) continue;  // limit: wait for drop
+                } else {
+                    if (price <= ce.levels[ei].entryPrice) continue;  // breakout: wait for rise
+                }
 
                 double qty   = ce.levels[ei].fundingQty;
                 if (qty < EPS) continue;

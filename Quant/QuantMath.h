@@ -683,7 +683,12 @@ private:
                           double referencePrice)
     {
         if (maxRisk <= 0.0)
-            return 0.0;
+        {
+            // Standard mode: TP = entry * (1 + eo * (i+1))
+            double factor = eo * static_cast<double>(levelIndex + 1);
+            return isShort ? entryPrice * (1.0 - factor)
+                           : entryPrice * (1.0 + factor);
+        }
 
         double r = clamp01(risk);
         double tpRef = (referencePrice > 0.0) ? referencePrice : entryPrice;

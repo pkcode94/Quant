@@ -48,20 +48,51 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "style='width:100%;font-family:monospace;font-size:0.85em;background:#0b1426;color:#cbd5e1;"
              "border:1px solid #1a2744;border-radius:4px;padding:8px;'></textarea><br>"
              "<h3>Optimisable Parameters &theta;</h3>"
-             "<label>Surplus Rate (s)</label>"
-             "<input type='number' name='surplus' step='any' value='0.02'><br>"
-             "<label>Risk Coefficient (r)</label>"
-             "<input type='number' name='risk' step='any' value='0.5'><br>"
-             "<label>Steepness (&alpha;)</label>"
-             "<input type='number' name='steepness' step='any' value='6'><br>"
-             "<label>Fee Hedging (f<sub>h</sub>)</label>"
-             "<input type='number' name='feeHedging' step='any' value='1'><br>"
-             "<label>Max Risk (R<sub>max</sub>)</label>"
-             "<input type='number' name='maxRisk' step='any' value='0'><br>"
+             "<p style='color:#64748b;font-size:0.78em;margin-bottom:6px;'>"
+             "Each parameter has <strong style='color:#ef4444;'>non-negotiable bounds</strong> "
+             "(min/max the optimizer can never cross) and can be "
+             "<strong>frozen</strong> to exclude from learning entirely.</p>"
+             "<table style='font-size:0.85em;width:100%;'>"
+             "<thead><tr>"
+             "<th>Parameter</th>"
+             "<th>Initial &theta;</th>"
+             "<th style='color:#ef4444;'>Min (floor)</th>"
+             "<th style='color:#ef4444;'>Max (ceiling)</th>"
+             "<th>Freeze</th>"
+             "</tr></thead><tbody>"
+             "<tr><td>Surplus Rate (s)</td>"
+             "<td><input type='number' name='surplus' step='any' value='0.02' style='width:100%;'></td>"
+             "<td><input type='number' name='surplus_min' step='any' value='0' style='width:100%;'></td>"
+             "<td><input type='number' name='surplus_max' step='any' value='1' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='surplus_frozen' value='1'></td></tr>"
+             "<tr><td>Risk Coefficient (r)</td>"
+             "<td><input type='number' name='risk' step='any' value='0.5' style='width:100%;'></td>"
+             "<td><input type='number' name='risk_min' step='any' value='0' style='width:100%;'></td>"
+             "<td><input type='number' name='risk_max' step='any' value='1' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='risk_frozen' value='1'></td></tr>"
+             "<tr><td>Steepness (&alpha;)</td>"
+             "<td><input type='number' name='steepness' step='any' value='6' style='width:100%;'></td>"
+             "<td><input type='number' name='steepness_min' step='any' value='0.1' style='width:100%;'></td>"
+             "<td><input type='number' name='steepness_max' step='any' value='50' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='steepness_frozen' value='1'></td></tr>"
+             "<tr><td>Fee Hedging (f<sub>h</sub>)</td>"
+             "<td><input type='number' name='feeHedging' step='any' value='1' style='width:100%;'></td>"
+             "<td><input type='number' name='feeHedging_min' step='any' value='0.1' style='width:100%;'></td>"
+             "<td><input type='number' name='feeHedging_max' step='any' value='10' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='feeHedging_frozen' value='1'></td></tr>"
+             "<tr><td>Max Risk (R<sub>max</sub>)</td>"
+             "<td><input type='number' name='maxRisk' step='any' value='0' style='width:100%;'></td>"
+             "<td><input type='number' name='maxRisk_min' step='any' value='0' style='width:100%;'></td>"
+             "<td><input type='number' name='maxRisk_max' step='any' value='1' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='maxRisk_frozen' value='1'></td></tr>"
+             "<tr><td>Savings Rate (s<sub>save</sub>)</td>"
+             "<td><input type='number' name='savingsRate' step='any' value='0.05' style='width:100%;'></td>"
+             "<td><input type='number' name='savingsRate_min' step='any' value='0' style='width:100%;'></td>"
+             "<td><input type='number' name='savingsRate_max' step='any' value='1' style='width:100%;'></td>"
+             "<td style='text-align:center;'><input type='checkbox' name='savingsRate_frozen' value='1'></td></tr>"
+             "</tbody></table>"
              "<label>Min Risk (R<sub>min</sub>)</label>"
              "<input type='number' name='minRisk' step='any' value='0'><br>"
-             "<label>Savings Rate (s<sub>save</sub>)</label>"
-             "<input type='number' name='savingsRate' step='any' value='0.05'><br>"
              "<h3>Fixed Parameters</h3>"
              "<label>Fee Spread (f<sub>s</sub>)</label>"
              "<input type='number' name='feeSpread' step='any' value='0.001'><br>"
@@ -164,6 +195,14 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
         cp.maxRisk         = fd(f, "maxRisk");
         cp.minRisk         = fd(f, "minRisk");
         cp.savingsRate     = fd(f, "savingsRate", 0.05);
+
+        // Parse non-negotiable parameter bounds and freeze flags
+        cp.bSurplus     = { fd(f, "surplus_min", 0.0),     fd(f, "surplus_max", 1.0),     fv(f, "surplus_frozen") == "1" };
+        cp.bRisk        = { fd(f, "risk_min", 0.0),        fd(f, "risk_max", 1.0),        fv(f, "risk_frozen") == "1" };
+        cp.bSteepness   = { fd(f, "steepness_min", 0.1),   fd(f, "steepness_max", 50.0),  fv(f, "steepness_frozen") == "1" };
+        cp.bFeeHedging  = { fd(f, "feeHedging_min", 0.1),  fd(f, "feeHedging_max", 10.0), fv(f, "feeHedging_frozen") == "1" };
+        cp.bMaxRisk     = { fd(f, "maxRisk_min", 0.0),     fd(f, "maxRisk_max", 1.0),     fv(f, "maxRisk_frozen") == "1" };
+        cp.bSavingsRate = { fd(f, "savingsRate_min", 0.0),  fd(f, "savingsRate_max", 1.0), fv(f, "savingsRate_frozen") == "1" };
         cp.feeSpread       = fd(f, "feeSpread", 0.001);
         cp.deltaTime       = fd(f, "deltaTime", 1.0);
         cp.symbolCount     = fi(f, "symbolCount", 1);
@@ -473,7 +512,8 @@ window.addEventListener('resize',drawChart);
 
                     h << "<h2>Parameter Optimisation</h2>"
                          "<table><tr><th>Parameter</th><th>\\u03b8 initial</th><th>\\u03b8 optimised</th>"
-                         "<th>\\u0394\\u03b8</th><th>\\u2202J/\\u2202\\u03b8 initial</th>"
+                         "<th>\\u0394\\u03b8</th><th>Bounds</th><th>Status</th>"
+                         "<th>\\u2202J/\\u2202\\u03b8 initial</th>"
                          "<th>\\u2202J/\\u2202\\u03b8 final</th></tr>";
 
                     const auto& ip = result.initialParams;
@@ -481,22 +521,25 @@ window.addEventListener('resize',drawChart);
                     const auto& ig = result.initialGradients;
                     const auto& fg = result.finalGradients;
 
-                    auto paramRow = [&](const char* name, double init, double opt, double gi, double gf) {
+                    auto paramRow = [&](const char* name, double init, double opt,
+                                        double gi, double gf, const ParamBound& b) {
                         h << "<tr><td>" << name << "</td>"
                           << "<td>" << init << "</td>"
                           << "<td>" << opt << "</td>"
                           << "<td class='" << (opt - init >= 0 ? "buy" : "sell") << "'>"
                           << (opt - init) << "</td>"
+                          << "<td style='color:#64748b;font-size:0.82em;'>[" << b.lower << ", " << b.upper << "]</td>"
+                          << "<td>" << (b.frozen ? "\\u2744 Frozen" : "\\u2714 Learnable") << "</td>"
                           << "<td>" << gi << "</td>"
                           << "<td>" << gf << "</td></tr>";
                     };
 
-                    paramRow("s (surplus)",  ip.surplus,    op.surplus,    ig.dJ_dSurplus,    fg.dJ_dSurplus);
-                    paramRow("r (risk)",     ip.risk,       op.risk,       ig.dJ_dRisk,       fg.dJ_dRisk);
-                    paramRow("\\u03b1 (steep)", ip.steepness, op.steepness, ig.dJ_dSteepness, fg.dJ_dSteepness);
-                    paramRow("f_h (feeHedge)", ip.feeHedging, op.feeHedging, ig.dJ_dFeeHedging, fg.dJ_dFeeHedging);
-                    paramRow("R_max",        ip.maxRisk,    op.maxRisk,    ig.dJ_dMaxRisk,    fg.dJ_dMaxRisk);
-                    paramRow("s_save",       ip.savingsRate, op.savingsRate, ig.dJ_dSavingsRate, fg.dJ_dSavingsRate);
+                    paramRow("s (surplus)",  ip.surplus,    op.surplus,    ig.dJ_dSurplus,    fg.dJ_dSurplus,    ip.bSurplus);
+                    paramRow("r (risk)",     ip.risk,       op.risk,       ig.dJ_dRisk,       fg.dJ_dRisk,       ip.bRisk);
+                    paramRow("\\u03b1 (steep)", ip.steepness, op.steepness, ig.dJ_dSteepness, fg.dJ_dSteepness, ip.bSteepness);
+                    paramRow("f_h (feeHedge)", ip.feeHedging, op.feeHedging, ig.dJ_dFeeHedging, fg.dJ_dFeeHedging, ip.bFeeHedging);
+                    paramRow("R_max",        ip.maxRisk,    op.maxRisk,    ig.dJ_dMaxRisk,    fg.dJ_dMaxRisk,    ip.bMaxRisk);
+                    paramRow("s_save",       ip.savingsRate, op.savingsRate, ig.dJ_dSavingsRate, fg.dJ_dSavingsRate, ip.bSavingsRate);
                     h << "</table>";
 
                     // Forward trace
@@ -550,20 +593,63 @@ window.addEventListener('resize',drawChart);
                             h << "<h2>Level Detail (Cycle " << (result.forwardTrace.size() - 1) << ")</h2>"
                                  "<table><tr><th>Level</th><th>Entry</th><th>TP</th><th>Qty</th>"
                                  "<th>Funding</th><th>OH</th><th>EO</th>"
-                                 "<th>Gross</th><th>Net</th></tr>";
+                                 "<th>Gross</th><th>Net</th><th>Buy Time</th><th>Sell Time</th><th>Status</th></tr>";
                             for (size_t i = 0; i < last.levels.size(); ++i)
                             {
                                 const auto& l = last.levels[i];
+                                bool sold = (l.sellFee > 0 || l.grossProfit != 0 || l.netProfit != 0);
+
+                                // Format timestamps as ISO date-time strings
+                                // Uses gmtime for post-epoch, Howard Hinnant's civil_from_days for pre-epoch
+                                auto fmtTime = [](long long ts) -> std::string {
+                                    if (ts == 0) return "&mdash;";
+                                    std::time_t t = static_cast<std::time_t>(ts);
+                                    std::tm tm{};
+                                    bool ok = false;
+#ifdef _WIN32
+                                    ok = (gmtime_s(&tm, &t) == 0);
+#else
+                                    ok = (gmtime_r(&t, &tm) != nullptr);
+#endif
+                                    if (ok) {
+                                        char buf[32];
+                                        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+                                        return buf;
+                                    }
+                                    // Fallback for pre-epoch dates (gmtime_s fails for negative time_t on Windows)
+                                    long long sod = ((ts % 86400) + 86400) % 86400;
+                                    long long z = (ts - sod) / 86400 + 719468;
+                                    long long era = (z >= 0 ? z : z - 146096) / 146097;
+                                    long long doe = z - era * 146097;
+                                    long long yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+                                    long long y = yoe + era * 400;
+                                    long long doy = doe - (365*yoe + yoe/4 - yoe/100);
+                                    long long mp = (5*doy + 2) / 153;
+                                    int d = static_cast<int>(doy - (153*mp + 2) / 5 + 1);
+                                    int m = static_cast<int>(mp + (mp < 10 ? 3 : -9));
+                                    y += (m <= 2);
+                                    char buf[32];
+                                    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d",
+                                             static_cast<int>(y), m, d,
+                                             static_cast<int>(sod / 3600),
+                                             static_cast<int>((sod % 3600) / 60));
+                                    return buf;
+                                };
+
                                 h << "<tr><td>" << i << "</td>"
                                   << "<td>" << l.entryPrice << "</td>"
-                                  << "<td>" << l.tpPrice << "</td>"
+                                  << "<td" << (sold ? "" : " style='color:#64748b;font-style:italic;'") << ">"
+                                  << l.tpPrice << "</td>"
                                   << "<td>" << l.quantity << "</td>"
                                   << "<td>" << l.funding << "</td>"
                                   << "<td>" << l.overhead << "</td>"
                                   << "<td>" << l.effectiveOH << "</td>"
                                   << "<td>" << l.grossProfit << "</td>"
                                   << "<td class='" << (l.netProfit >= 0 ? "buy" : "sell") << "'>"
-                                  << l.netProfit << "</td></tr>";
+                                  << l.netProfit << "</td>"
+                                  << "<td style='font-size:0.82em;' title='ts=" << l.entryTime << "'>" << fmtTime(l.entryTime) << "</td>"
+                                  << "<td style='font-size:0.82em;' title='ts=" << l.sellTime << "'>" << fmtTime(l.sellTime) << "</td>"
+                                  << "<td>" << (sold ? "\\u2714 Sold" : "\\u23F3 Open") << "</td></tr>";
                             }
                             h << "</table>";
                         }
