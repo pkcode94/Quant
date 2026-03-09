@@ -5,19 +5,23 @@
 #include "ProfitCalculator.h"
 #include <mutex>
 #include <algorithm>
+#include <iostream>
 
 inline void registerCoreRoutes(httplib::Server& svr, AppContext& ctx)
 {
     auto& db = ctx.defaultDb;
     auto& dbMutex = ctx.dbMutex;
 
-    // ========== GET / — Dashboard ==========
+    // ========== GET / ï¿½ Dashboard ==========
     svr.Get("/", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
+        std::cerr << "[DB] / dashboard using " << db.tradesFilePath() << "\n";
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
         h << "<h1>Quant Trade Manager</h1>";
+        h << "<div class='muted'><small>DB: " << html::esc(db.tradesFilePath()) << "</small></div>";
 
         double wal = db.loadWalletBalance();
         double dep = db.deployedCapital();
@@ -367,7 +371,7 @@ inline void registerCoreRoutes(httplib::Server& svr, AppContext& ctx)
         res.set_content(html::wrap("DCA", h.str()), "text/html");
     });
 
-    // ========== GET /pnl — P&L Curve ==========
+    // ========== GET /pnl ï¿½ P&L Curve ==========
     svr.Get("/pnl", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
         auto pnl = db.loadPnl();
@@ -527,7 +531,7 @@ inline void registerCoreRoutes(httplib::Server& svr, AppContext& ctx)
               // time range
               "  var tsMin=data[0].ts,tsMax=data[data.length-1].ts;\n"
               "  if(tsMax===tsMin) tsMax=tsMin+1;\n"
-              // value range — always include 0
+              // value range ï¿½ always include 0
               "  var vMin=0,vMax=0;\n"
               "  for(var i=0;i<data.length;i++){var c=data[i].cum;if(c<vMin)vMin=c;if(c>vMax)vMax=c;}\n"
               "  var vPad=(vMax-vMin)*0.1||1;\n"

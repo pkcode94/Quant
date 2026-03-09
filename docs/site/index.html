@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant Ledger — Trade Journal &amp; Risk Management for Android</title>
+<meta name="description" content="Free, open-source trade ledger for Android. Record trades, set TP/SL levels, compute overhead, manage multi-level serial plans, and compound profits with managed chains. No accounts, no telemetry. Your data stays on your device.">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Courier New','Fira Code',monospace;background:#000;color:#c0c0c0;line-height:1.7;}
+a{color:#00e676;text-decoration:none;}
+a:hover{text-decoration:underline;}
+
+/* Nav */
+header{background:#0a0a0a;border-bottom:1px solid #00e676;padding:10px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+header .logo{color:#00e676;font-size:1.1em;font-weight:bold;letter-spacing:2px;}
+header nav a{color:#757575;font-size:0.82em;padding:4px 8px;}
+header nav a:hover{color:#00e676;}
+
+/* Hero */
+.hero{text-align:center;padding:48px 20px 32px 20px;border-bottom:1px solid #1a1a1a;}
+.hero h1{color:#00e676;font-size:1.6em;letter-spacing:3px;margin-bottom:8px;}
+.hero .sub{color:#757575;font-size:0.92em;max-width:600px;margin:0 auto 24px auto;}
+.hero .cta{display:inline-block;background:#004d25;color:#00e676;border:1px solid #00e67688;
+    padding:10px 28px;border-radius:4px;font-size:0.95em;font-family:inherit;font-weight:bold;letter-spacing:1px;}
+.hero .cta:hover{background:#006b35;border-color:#00e676;text-decoration:none;}
+
+/* Sections */
+.wrap{max-width:800px;margin:0 auto;padding:32px 20px;}
+h2{color:#00e676;font-size:1.05em;letter-spacing:1px;text-transform:uppercase;margin:0 0 12px 0;border-bottom:1px solid #1a1a1a;padding-bottom:6px;}
+h3{color:#ffd600;font-size:0.88em;margin:16px 0 4px 0;}
+
+.card{background:#0a0a0a;border:1px solid #1a1a1a;border-radius:4px;padding:16px;margin:12px 0;}
+.card p{font-size:0.84em;margin:0 0 8px 0;}
+.card p:last-child{margin-bottom:0;}
+
+/* Features */
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0;}
+.feat{background:#0a0a0a;border:1px solid #1a1a1a;border-radius:4px;padding:14px;}
+.feat .icon{color:#00e676;font-size:1.2em;margin-bottom:4px;}
+.feat .title{color:#00e676;font-size:0.85em;font-weight:bold;margin-bottom:4px;}
+.feat .desc{color:#757575;font-size:0.78em;line-height:1.6;}
+
+/* Screenshots placeholder */
+.screens{display:flex;gap:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:12px 0;}
+.screens .shot{background:#0a0a0a;border:1px solid #1a1a1a;border-radius:4px;min-width:220px;height:380px;
+    display:flex;align-items:center;justify-content:center;color:#757575;font-size:0.75em;flex-shrink:0;}
+
+/* Workflow */
+.step{display:flex;gap:10px;align-items:flex-start;margin:8px 0;}
+.step .num{color:#ffd600;font-size:0.95em;min-width:24px;}
+.step .txt{font-size:0.82em;}
+.step .txt strong{color:#00e676;}
+
+/* Donate */
+.donate{background:#0a0a0a;border:1px solid #ffd60044;border-radius:4px;padding:16px;margin:16px 0;text-align:center;}
+.donate .label{color:#ffd600;font-size:0.85em;margin-bottom:8px;}
+.donate .addr{font-size:0.72em;word-break:break-all;color:#c0c0c0;background:#050505;
+    padding:6px 10px;border-radius:3px;display:inline-block;max-width:100%;margin-top:4px;}
+
+/* Footer */
+footer{border-top:1px solid #1a1a1a;padding:20px;text-align:center;color:#757575;font-size:0.72em;}
+footer a{color:#757575;}footer a:hover{color:#00e676;}
+
+/* Responsive */
+@media(max-width:600px){
+    .hero h1{font-size:1.2em;}
+    .hero .sub{font-size:0.82em;}
+    .features{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<header>
+    <span class="logo">&#9939; QUANT</span>
+    <nav>
+        <a href="#about">About</a>
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#download">Download</a>
+        <a href="https://github.com/pkcode94/quant">GitHub</a>
+    </nav>
+</header>
+
+<!-- ======== Hero ======== -->
+<section class="hero">
+    <h1>&#9939; QUANT LEDGER</h1>
+    <p class="sub">Don&rsquo;t just trade &mdash; keep track of them.</p>
+    <a class="cta" href="#download">&#9660; Download for Android</a>
+</section>
+
+<!-- ======== About ======== -->
+<section class="wrap" id="about">
+    <h2>About</h2>
+    <div class="card">
+        <p>All you need is a ledger &mdash; an accurate and good one. Even better
+        if that ledger is also an <a href="https://modelcontextprotocol.io/">MCP server</a>.</p>
+
+        <p>We provide our ledger for you <strong style="color:#00e676;">freely</strong>.
+        If you are not satisfied with our risk management you can simply add
+        the trades, the stop-loss fractions and the profit fractions if SL/TP
+        is desired, and then calculate how much profit your trades made.</p>
+
+        <p>Brokers usually keep track of that for you &mdash; but what if your
+        broker goes down? So do your trades and potentially your assets.
+        Our ledger takes care of the trade entries.</p>
+
+        <p>What if you are trading physical assets that you cannot trade on a
+        broker? Gold, real estate, private deals, tokens on a DEX with no
+        portfolio view?</p>
+
+        <p>Quant Ledger is a <strong style="color:#ffd600;">single source of
+        truth</strong> across every asset class. Record the buy, set your exits,
+        watch the math, and own your data &mdash; no API keys, no broker lock-in,
+        no subscriptions.</p>
+    </div>
+</section>
+
+<!-- ======== Features ======== -->
+<section class="wrap" id="features">
+    <h2>What you get</h2>
+    <div class="features">
+        <div class="feat">
+            <div class="icon">&#9654;</div>
+            <div class="title">Trade Journal</div>
+            <div class="desc">Record buys and sells with price, quantity, fees,
+            and timestamps. Import historical trades or execute new ones that
+            move your wallet balance.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9650;</div>
+            <div class="title">Exit Strategies</div>
+            <div class="desc">Attach take-profit and stop-loss levels to every
+            position. Set multiple exit points per trade &mdash; partial sells
+            at different targets. Toggle stop-losses on or off as the market moves.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9733;</div>
+            <div class="title">Profit &amp; Loss</div>
+            <div class="desc">Instant P&amp;L calculation for any trade at any price.
+            Net profit, gross profit, ROI &mdash; with fee deductions built in.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9881;</div>
+            <div class="title">Serial Generator</div>
+            <div class="desc">Model compound-growth strategies: define an entry price,
+            overhead, exit fraction, and steepness &mdash; generate a full plan of
+            scaled entries with calculated take-profits and sell quantities.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9830;</div>
+            <div class="title">Entry Points</div>
+            <div class="desc">Plan where to enter the market before you commit
+            capital. Store target prices, quantities, and risk parameters. Feed
+            entries into managed chains for systematic execution.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9939;</div>
+            <div class="title">Managed Chains</div>
+            <div class="desc">Group entries into cycles. Activate a chain, add
+            entries to each cycle, track savings rate and reinvestment. The chain
+            manager handles the bookkeeping of compounding strategies.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9783;</div>
+            <div class="title">Overhead Calculator</div>
+            <div class="desc">Compute the real cost of a trade: spreads, hedging
+            fees, time decay, and opportunity cost across your portfolio. Know
+            your breakeven before you click buy.</div>
+        </div>
+        <div class="feat">
+            <div class="icon">&#9889;</div>
+            <div class="title">MCP Daemon</div>
+            <div class="desc">The app runs a built-in MCP server on your device.
+            Connect Claude, Copilot, or any AI assistant over your local network
+            and let them inspect your portfolio, run what-if analyses, generate
+            plans, and execute trades &mdash; all with confirmation prompts.
+            Desktop and Android.</div>
+        </div>
+    </div>
+</section>
+
+<!-- ======== Workflow ======== -->
+<section class="wrap" id="workflow">
+    <h2>Workflow</h2>
+    <div class="card">
+        <div class="step"><span class="num">1.</span><span class="txt"><strong>Fund your wallet</strong> &mdash; deposit your starting capital so the ledger can track balances.</span></div>
+        <div class="step"><span class="num">2.</span><span class="txt"><strong>Plan entries</strong> &mdash; use the Serial Generator to model a strategy, or add entry points manually.</span></div>
+        <div class="step"><span class="num">3.</span><span class="txt"><strong>Execute or import trades</strong> &mdash; <em>Execute Buy</em> debits your wallet; <em>Import Buy</em> records without moving funds.</span></div>
+        <div class="step"><span class="num">4.</span><span class="txt"><strong>Set exits</strong> &mdash; attach TP/SL levels to each buy. Partial sells at different price targets.</span></div>
+        <div class="step"><span class="num">5.</span><span class="txt"><strong>Close positions</strong> &mdash; <em>Execute Sell</em> credits your wallet; the ledger calculates realised P&amp;L automatically.</span></div>
+        <div class="step"><span class="num">6.</span><span class="txt"><strong>Repeat &amp; compound</strong> &mdash; use managed chains to roll profits into the next cycle with a savings rate.</span></div>
+    </div>
+</section>
+
+<!-- ======== Philosophy ======== -->
+<section class="wrap">
+    <h2>Philosophy</h2>
+    <div class="card">
+        <p>Quant Ledger is <strong style="color:#00e676;">open source</strong> and
+        runs entirely on your device. There is no account, no telemetry, no cloud
+        requirement. Your trades are your business.</p>
+
+        <p>The risk management tools &mdash; serial plans, overhead calculations,
+        chain compounding &mdash; exist because trading is not just about entries.
+        Knowing <em>when to sell</em>, <em>how much to sell</em>, and <em>what it
+        really costs</em> is what separates a journal from a strategy.</p>
+
+        <p>We don&rsquo;t connect to brokers, don&rsquo;t stream prices, and
+        don&rsquo;t offer signals. This is a
+        <span style="color:#ffd600;">calculator and a notebook</span> &mdash;
+        you bring the decisions.</p>
+    </div>
+</section>
+
+<!-- ======== Download ======== -->
+<section class="wrap" id="download">
+    <h2>Download</h2>
+    <div class="card" style="text-align:center;">
+        <p style="font-size:1em;color:#00e676;font-weight:bold;margin-bottom:12px;">
+        &#9939; Quant Ledger for Android</p>
+        <p>Requires Android 7.0+ (API 24) &mdash; arm64, armv7, or x86_64.</p>
+        <p style="margin-top:12px;">
+            <a class="cta" href="quant-ledger.apk"
+               style="display:inline-block;background:#004d25;color:#00e676;border:1px solid #00e67688;
+               padding:10px 28px;border-radius:4px;font-size:0.95em;font-family:inherit;font-weight:bold;">
+               &#9660; Download APK</a>
+        </p>
+        <p style="font-size:0.72em;color:#757575;margin-top:12px;">
+        Open source &mdash; build it yourself from
+        <a href="https://github.com/pkcode94/quant">GitHub</a>.</p>
+    </div>
+</section>
+
+<!-- ======== Donate ======== -->
+<section class="wrap" id="donate">
+    <h2>Support the project</h2>
+    <div class="donate">
+        <div class="label">Try it for free &mdash; and if you&rsquo;re feeling
+        grateful, you may donate to our Bitcoin wallet.</div>
+        <div class="addr">bc1qYOUR_BITCOIN_ADDRESS_HERE</div>
+        <p style="font-size:0.7em;color:#757575;margin-top:8px;">
+        Every sat helps keep the project alive. Thank you.</p>
+    </div>
+</section>
+
+<!-- ======== Source ======== -->
+<section class="wrap">
+    <h2>Source &amp; Documentation</h2>
+    <div class="card">
+        <p><a href="https://github.com/pkcode94/quant">&#9654; GitHub Repository</a>
+        &mdash; full source code, build instructions, and the mathematical paper.</p>
+        <p>The framework is described in a self-contained paper:
+        <em>&ldquo;Sigmoid-Governed Fee Hedging and Serial Position Management:
+        A Deterministic Framework for Overhead-Neutral Cyclic Trading.&rdquo;</em></p>
+    </div>
+</section>
+
+<footer>
+    <p>&copy; 2025 Quant Ledger &mdash;
+    <a href="https://github.com/pkcode94/quant">GitHub</a> &middot;
+    Open-source under MIT License</p>
+</footer>
+
+</body>
+</html>

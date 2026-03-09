@@ -1,0 +1,26 @@
+{
+    "files.exclude": {
+        "**/.git": true,
+        "**/.vscode": false,
+        "**/x64": false,
+        "**/.vs": true,
+        "**/*.ilk": true,
+        "**/*.pdb": false,
+        "**/*.obj": true
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
+    "C_Cpp.intelliSenseEngine": "msvc",
+    "C_Cpp.clang_format_fallbackStyle": "Microsoft",
+    "editor.formatOnSave": false,
+    "editor.defaultFormatter": null,
+    "[cpp]": {
+        "editor.defaultFormatter": null
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/.vs": true,
+        "**/x64": false,
+        "**/db": false,
+        "**/users": false
+    }
+}

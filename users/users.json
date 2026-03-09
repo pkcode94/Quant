@@ -1,0 +1,11 @@
+[
+  {
+    "username": "ADMIN",
+    "passwordHash": "b43ff7620e7791633649024f24420512077b5965f5cc25e97e893ca126aa5cb1",
+    "salt": "RpgY1gOHd6KbEGrnCatTdGixNoihb2Lt",
+    "email": "",
+    "createdAt": "2026-03-08T23:35:35",
+    "premium": true,
+    "premiumExpiry": ""
+  }
+]

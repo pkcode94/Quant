@@ -386,23 +386,106 @@ The buy fee is amortised: each level's buy fee share equals $F_{\text{buy}} \cdo
 
 ### 7.1 Purpose
 
-When a position is opened, the system can optionally inflate TP targets to pre-fund $n_d$ future downturn cycles. The idea: if the market drops after your exit, you'll have enough profit reserved to re-enter at the lower price and survive the downturn.
+When a position exits at TP, the system can optionally inflate TP targets to pre-fund re-entry if the market subsequently drops. The downtrend buffer answers a concrete question:
 
-### 7.2 Axis-Dependent Sigmoid Curvature
+> *If the price drops to $P_{\text{buffer}}$ after my exit, what quantity $q_{\text{next}}$ can I re-enter with using only the extra profit from the buffer inflation?*
 
-The buffer uses the position delta $\delta = P \cdot q / T$ as *both* the input to the sigmoid and the steepness parameter. This creates axis-dependent curvature — the shape of the buffer function depends on where the position sits in price × quantity space.
-
-**Asymptotes:**
+The answer is always a **fraction** of the current position. This is not a design choice — it is a mathematical inevitability. The extra profit from inflating a TP by a few percent can never fund a full-size re-entry at a comparable price. The buffer buys *part of* the next trade, not the whole thing:
 
 $$
-\text{upper} = \begin{cases}
-R_{\max} & \text{if } R_{\max} > 0 \\
-\text{EO} & \text{otherwise}
-\end{cases}
+q_{\text{next}} = \frac{\Delta\Pi}{P_{\text{buffer}} \cdot (1 + \mathcal{F})} < q \quad \text{always, when } P_{\text{buffer}} > 0
 $$
 
+This makes the buffer a **fractional re-entry hedge**: it guarantees that you can re-enter with a specific (smaller) quantity at a specific (lower) price, with all fees covered.
+
+### 7.2 The Price-Level Guarantee
+
+**Core formula.** Given a desired re-entry price $P_{\text{buffer}}$ and quantity $q_{\text{next}}$, the TP multiplier required:
+
 $$
-\text{lower} = R_{\min}
+\boxed{
+\text{buffer}_{\text{dt}} = 1 + \frac{n_d \cdot P_{\text{buffer}} \cdot q_{\text{next}} \cdot (1 + \mathcal{F})}{\text{TP}_{\text{base}} \cdot q}
+}
+$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $n_d$ | Number of downturn re-entries to pre-fund |
+| $P_{\text{buffer}}$ | Price level at which re-entry is guaranteed ($P_{\text{buffer}} < P_e$) |
+| $q_{\text{next}}$ | Re-entry quantity ($q_{\text{next}} \leq q$; see §7.2.1) |
+| $\mathcal{F} = f_s \cdot f_h \cdot \Delta t$ | Fee component (§3.1) |
+| $\text{TP}_{\text{base}} = P_e \cdot (1 + \text{EO})$ | Un-buffered take-profit price |
+| $q$ | Current position quantity |
+
+**Derivation.** The extra profit from buffer inflation:
+
+$$
+\Delta\Pi = \text{TP}_{\text{base}} \cdot (\text{buffer} - 1) \cdot q
+$$
+
+The cost of one fee-neutral re-entry at $P_{\text{buffer}}$:
+
+$$
+C_{\text{re}} = P_{\text{buffer}} \cdot q_{\text{next}} \cdot (1 + \mathcal{F})
+$$
+
+Setting $\Delta\Pi \geq n_d \cdot C_{\text{re}}$ and solving yields the formula.
+
+**Adjusted TP:**
+
+$$
+\text{TP}_{\text{adj}} = \text{TP}_{\text{base}} \cdot \text{buffer}_{\text{dt}}
+$$
+
+#### 7.2.1 The Fractional Bound on $q_{\text{next}}$
+
+For any buffer multiplier, the maximum re-entry quantity at price $P_{\text{buffer}}$ is:
+
+$$
+\boxed{
+q_{\text{next}}^{\max} = \frac{(\text{buffer} - 1) \cdot \text{TP}_{\text{base}} \cdot q}{n_d \cdot P_{\text{buffer}} \cdot (1 + \mathcal{F})}
+}
+$$
+
+Since $\text{buffer} - 1 \ll 1$ typically (a few percent), and $P_{\text{buffer}} \sim P_e$, this gives:
+
+$$
+\frac{q_{\text{next}}^{\max}}{q} \approx \frac{(\text{buffer} - 1) \cdot (1 + \text{EO})}{1 + \mathcal{F}} \cdot \frac{P_e}{P_{\text{buffer}}}
+$$
+
+For realistic parameters ($\text{EO} \approx 3\%$, $\text{buffer} \approx 1.03$, $\mathcal{F} \approx 0.2\%$, $P_{\text{buffer}} \approx P_e$):
+
+$$
+\frac{q_{\text{next}}^{\max}}{q} \approx 0.03 \times 1.03 / 1.002 \approx 3.1\%
+$$
+
+**The buffer funds roughly 3% of the next trade.** This is the correct interpretation — calling it a "downtrend buffer" was a misnomer insofar as it suggested protection against the full downtrend. It protects a *fraction* of the re-entry, scaled by how much TP inflation the system applies.
+
+### 7.3 The Implied Price Level
+
+Every buffer multiplier implies a concrete $P_{\text{buffer}}$ — the maximum re-entry price the extra profit can fund for a given $q_{\text{next}}$. Equivalently, for a given price the buffer implies a maximum quantity (§7.2.1). The two are linked:
+
+$$
+\boxed{
+P_{\text{buffer}} = \frac{(\text{buffer} - 1) \cdot \text{TP}_{\text{base}} \cdot q}{n_d \cdot q_{\text{next}} \cdot (1 + \mathcal{F})}
+}
+$$
+
+When $q_{\text{next}} = q$ (full re-entry), this yields the price at which a full-size re-entry is funded. In practice this price is very close to zero — the buffer can only fund a full position at extreme discounts. The useful form is to fix $P_{\text{buffer}}$ near $P_e$ and read off $q_{\text{next}}^{\max}$, which is always a small fraction of $q$.
+
+This makes every buffer reportable in two equivalent ways:
+
+1. *"Your TP is inflated to fund re-entry of 0.003 BTC at \$48,500."* (fixed price, fractional qty)
+2. *"Your TP is inflated to fund re-entry of 0.1 BTC at \$1,455."* (full qty, deep discount price)
+
+### 7.4 Sigmoid-Derived $P_{\text{buffer}}$ (Automatic Mode)
+
+When $P_{\text{buffer}}$ is not specified explicitly, the system derives it from the position's characteristics using the axis-dependent sigmoid (§2.1). The sigmoid determines a per-cycle fractional cost $\text{pc}$, from which $P_{\text{buffer}}$ is recovered via §7.3.
+
+**Position delta** (portfolio weight):
+
+$$
+\delta = \frac{P \cdot q}{T}
 $$
 
 **Hyperbolic compression** (maps $\delta$ to $[0, 1)$):
@@ -417,38 +500,52 @@ $$
 \alpha_d = \max(\delta, 0.1)
 $$
 
-**Per-cycle buffer:**
+**Asymptotes:**
+
+$$
+\text{upper} = \begin{cases}
+R_{\max} & \text{if } R_{\max} > 0 \\
+\text{EO} & \text{otherwise}
+\end{cases}, \qquad
+\text{lower} = R_{\min}
+$$
+
+**Per-cycle buffer fraction:**
 
 $$
 \text{pc} = R_{\min} + \hat\sigma_{\alpha_d}(t) \cdot (\text{upper} - R_{\min})
 $$
 
-**Total buffer:**
+**Buffer multiplier (sigmoid mode):**
 
 $$
 \text{buffer} = 1 + n_d \cdot \text{pc}
 $$
 
+**Implied price level** from the sigmoid buffer:
+
 $$
-\text{TP}_{\text{adj}} = \text{TP}_{\text{base}} \cdot \text{buffer}
+P_{\text{buffer}}^{\text{implied}} = \frac{\text{pc} \cdot \text{TP}_{\text{base}}}{1 + \mathcal{F}} \qquad (\text{when } q_{\text{next}} = q)
 $$
 
-### 7.3 Behaviour Table
+This completes the bridge: the sigmoid computes a buffer fraction → the fraction implies a price level → the price level is the guarantee. The two modes (explicit $P_{\text{buffer}}$ vs. sigmoid-derived) produce the same buffer multiplier when $P_{\text{buffer}} = P_{\text{buffer}}^{\text{implied}}$.
 
-| $\delta$ | Steepness | Per-cycle buffer | Interpretation |
-|----------|-----------|-----------------|----------------|
-| $\ll 1$ | Near-linear | $\approx R_{\min}$ | Small position, minimal buffer |
-| $\approx 1$ | Mild S-curve | Midpoint between bounds | Balanced protection |
-| $\gg 1$ | Steep S-curve | Saturates at upper | Position dominates portfolio, maximum protection |
-| $= 0$ | — | Buffer $= 1$ | No position deployed, nothing to protect |
+### 7.5 Behaviour Table
 
-### 7.4 Time Sensitivity
+| $\delta$ | Sigmoid shape | $P_{\text{buffer}}^{\text{implied}}$ | Interpretation |
+|----------|---------------|--------------------------------------|----------------|
+| $\ll 1$ | Near-linear | Close to $0$ | Small position → covers re-entry only at deep discounts |
+| $\approx 1$ | Mild S-curve | Midpoint of range | Balanced protection |
+| $\gg 1$ | Steep S-curve | Near $\text{upper} \cdot \text{TP}_{\text{base}} / (1+\mathcal{F})$ | Position dominates portfolio → maximum protection |
+| $= 0$ | — | Buffer $= 1$ (disabled) | No position deployed |
 
-When $R_{\max} = 0$, the upper asymptote falls back to $\text{EO}$, which contains the $\Delta t$ factor through the fee component. This makes the buffer *time-sensitive* — longer holding periods inflate the buffer automatically. When $R_{\max} > 0$, it acts as a hard cap regardless of time.
+### 7.6 Time Sensitivity
 
-### 7.5 Stop-Loss Hedge Buffer
+When $R_{\max} = 0$, the upper asymptote falls back to $\text{EO}$, which contains the $\Delta t$ factor. This makes $P_{\text{buffer}}^{\text{implied}}$ *time-sensitive* — longer holding periods inflate the guaranteed re-entry level. When $R_{\max} > 0$, it acts as a hard cap.
 
-Mirrors the downtrend buffer (§7.2) but pre-funds potential future stop-loss hits instead of downtrend re-entries. When $n_{\text{sl}} > 0$, TPs are inflated so that the extra profit covers $n_{\text{sl}}$ future SL events at the configured fractional loss.
+### 7.7 Stop-Loss Hedge Buffer
+
+Mirrors the downtrend buffer but pre-funds potential future stop-loss hits. When $n_{\text{sl}} > 0$, TPs are inflated so the extra profit covers $n_{\text{sl}}$ future SL events at the configured fractional loss:
 
 $$
 \text{buffer}_{\text{sl}} = 1 + n_{\text{sl}} \cdot \phi_{\text{sl}} \cdot \text{pc}
@@ -459,6 +556,77 @@ The combined TP multiplier applies both buffers multiplicatively:
 $$
 \text{TP}_{\text{adj}} = \text{TP}_{\text{base}} \cdot \text{buffer}_{\text{dt}} \cdot \text{buffer}_{\text{sl}}
 $$
+
+### 7.8 Deterministic Guarantee
+
+**Theorem.** *The fee-neutral guarantee (§1.2) is preserved by the buffer. If TP is hit, all fees for both the current trade and the buffered fractional re-entry are covered, provided $P_{\text{buffer}} < P_e$ and $q_{\text{next}} \leq q_{\text{next}}^{\max}$.*
+
+**Proof.** The buffer inflates TP by the factor $(\text{buffer} - 1)$. The extra profit $\Delta\Pi = \text{TP}_{\text{base}} \cdot (\text{buffer} - 1) \cdot q$ is deterministic given TP is hit. The re-entry cost $C_{\text{re}} = P_{\text{buffer}} \cdot q_{\text{next}} \cdot (1 + \mathcal{F})$ is fixed at the time the plan is generated. Since $\Delta\Pi \geq n_d \cdot C_{\text{re}}$ by construction (§7.2), the profit from the current trade funds exactly the re-entry.
+
+The re-entry position at $P_{\text{buffer}} < P_e$ has strictly lower overhead:
+
+$$
+\text{OH}(P_{\text{buffer}}, q_{\text{next}}) \leq \text{OH}(P_e, q) \quad \text{when } q_{\text{next}} \leq q
+$$
+
+because the denominator $P_{\text{buffer}}/q_{\text{next}} \cdot T + K$ is at least as large (lower price, smaller quantity both increase $P/q$). The re-entry position's TP is therefore tighter (closer to entry), making it strictly *easier* to close profitably. $\square$
+
+**What the buffer does NOT guarantee:** It does not fund a full-size re-entry at the same price. The fractional bound (§7.2.1) shows $q_{\text{next}}^{\max} / q \approx \text{buffer} - 1$, which is typically 1–5%. The buffer is a *partial re-entry hedge*, not a drawdown shield.
+
+**Corollary.** $K$ and $\alpha$ constraints are unchanged — $K$ prevents division by zero, $\alpha$ shapes distributions. Neither depends on the buffer mechanism.
+
+### 7.9 Serial Generator Integration
+
+Each level $i$ in the serial plan (§8) has entry price $P_e^{(i)}$. The global price-level buffer must satisfy:
+
+$$
+P_{\text{buffer}} < \min_i P_e^{(i)} = P_e^{(0)}
+$$
+
+Since $P_e^{(0)}$ is the deepest entry, this guarantees consistency across all levels. The price-level form is *more conservative* than fractional in falling markets: a fixed $P_{\text{buffer}}$ does not shrink as entry prices fall, while a fractional buffer proportionally narrows.
+
+### 7.10 Validation Logic
+
+```cpp
+// Buffer from explicit price level and re-entry quantity
+double bufferFromPriceLevel(double pBuffer, double qNext,
+                            double tpBase, double q,
+                            double feeComponent, int nDowntrend)
+{
+    if (nDowntrend <= 0 || tpBase <= 0.0 || q <= 0.0) return 1.0;
+    return 1.0 + (double)nDowntrend * pBuffer * qNext * (1.0 + feeComponent)
+                 / (tpBase * q);
+}
+
+// Implied price level from any buffer multiplier
+double impliedBufferPrice(double buffer, double tpBase, double q,
+                          double qNext, double feeComponent, int nDowntrend)
+{
+    if (nDowntrend <= 0 || qNext <= 0.0 || (1.0 + feeComponent) <= 0.0)
+        return 0.0;
+    return (buffer - 1.0) * tpBase * q
+           / ((double)nDowntrend * qNext * (1.0 + feeComponent));
+}
+
+// Maximum re-entry quantity the buffer can fund at a given price (§7.2.1)
+double maxBufferedQuantity(double buffer, double tpBase, double q,
+                           double pBuffer, double feeComponent, int nDowntrend)
+{
+    if (nDowntrend <= 0 || pBuffer <= 0.0 || (1.0 + feeComponent) <= 0.0)
+        return 0.0;
+    return (buffer - 1.0) * tpBase * q
+           / ((double)nDowntrend * pBuffer * (1.0 + feeComponent));
+}
+
+// Verify: p_buffer must be below ALL entry prices in the plan
+bool validatePriceBuffer(double pBuffer,
+                         const std::vector<double>& entryPrices)
+{
+    for (double pe : entryPrices)
+        if (pBuffer >= pe) return false;
+    return true;
+}
+```
 
 ---
 
@@ -806,14 +974,17 @@ All formulas mirror. TP targets decrease below entry. SL targets increase above 
 | $q_{\text{sl}}$ | §5.6 | Fractional SL exit quantity |
 | $\phi_{\text{sl}}^{\text{clamped}}$ | §5.7 | Capital-loss cap on SL fraction |
 | $q_i^{\text{sell}}$ | §6.2 | Exit quantity per level |
-| buffer | §7.2 | Downtrend TP multiplier |
-| $\text{buffer}_{\text{sl}}$ | §7.5 | Stop-loss hedge TP multiplier |
+| $\text{buffer}_{\text{dt}}$ | §7.2 | Price-level downtrend TP multiplier |
+| $q_{\text{next}}^{\max}$ | §7.2.1 | Maximum buffered re-entry quantity (fractional bound) |
+| $P_{\text{buffer}}^{\text{implied}}$ | §7.3 | Implied re-entry price from any buffer |
+| $\text{buffer}_{\text{sl}}$ | §7.7 | Stop-loss hedge TP multiplier |
 | Coverage | §11.4 | Fee hedging verification |
 | $\partial\hat\sigma/\partial t$, $\partial\hat\sigma/\partial\alpha$ | §15.1 | Sigmoid gradient primitives |
 | $\partial\text{OH}/\partial T$ | §15.2 | Capital-overhead sensitivity |
 | $\partial\text{EO}/\partial s$ | §15.3 | Surplus linearity ($= f_h \Delta t$, constant) |
 | $\partial\text{TP}/\partial r$ | §15.6 | Risk warps TP distribution |
 | $\partial\Pi/\partial s$ | §15.7 | Profit-surplus sensitivity |
+| $\partial\text{buffer}/\partial P_{\text{buffer}}$ | §15.8.1 | Price-level buffer sensitivity (linear in $P_{\text{buffer}}$) |
 | $dT_c/d\theta$ | §15.9 | Chain recurrence (BPTT structure) |
 | $J_1 \ldots J_5$ | §16.2 | Optimisation objectives |
 
@@ -1052,7 +1223,41 @@ The risk derivative involves three coupled terms — entry redistribution, fundi
 
 ### 15.8 Downtrend Buffer Derivatives
 
-Buffer $= 1 + n_d \cdot \text{pc}$ where $\text{pc} = R_{\min} + \hat\sigma_{\alpha_d}(t) \cdot (\text{upper} - R_{\min})$.
+#### 15.8.1 Price-Level Buffer (§7.2)
+
+$$
+\text{buffer} = 1 + \frac{n_d \cdot P_{\text{buffer}} \cdot q_{\text{next}} \cdot (1 + \mathcal{F})}{\text{TP}_{\text{base}} \cdot q}
+$$
+
+Let $\beta = n_d \cdot q_{\text{next}} \cdot (1 + \mathcal{F}) / (\text{TP}_{\text{base}} \cdot q)$ — the coefficient of $P_{\text{buffer}}$ in the buffer formula. Then $\text{buffer} = 1 + \beta \cdot P_{\text{buffer}}$.
+
+**With respect to $P_{\text{buffer}}$:**
+
+$$
+\boxed{
+\frac{\partial\,\text{buffer}}{\partial P_{\text{buffer}}} = \beta = \frac{n_d \cdot q_{\text{next}} \cdot (1 + \mathcal{F})}{\text{TP}_{\text{base}} \cdot q}
+}
+$$
+
+This is constant — the buffer increases linearly with $P_{\text{buffer}}$. A higher buffer price (more protection) costs proportionally more TP inflation.
+
+**With respect to $q_{\text{next}}$:**
+
+$$
+\frac{\partial\,\text{buffer}}{\partial q_{\text{next}}} = \frac{n_d \cdot P_{\text{buffer}} \cdot (1 + \mathcal{F})}{\text{TP}_{\text{base}} \cdot q}
+$$
+
+**With respect to pump capital $T$** (through $\text{TP}_{\text{base}} = P_e(1 + \text{EO})$ where $\text{EO}$ depends on $T$):
+
+$$
+\frac{\partial\,\text{buffer}}{\partial T} = -\frac{n_d \cdot P_{\text{buffer}} \cdot q_{\text{next}} \cdot (1 + \mathcal{F})}{(\text{TP}_{\text{base}})^2 \cdot q} \cdot \frac{\partial\,\text{TP}_{\text{base}}}{\partial T}
+$$
+
+As pump capital grows, $\text{TP}_{\text{base}}$ falls toward $P_e(1 + s \cdot f_h \Delta t)$, and the buffer cost *increases* slightly — more capital means fees are a smaller fraction, so the buffer must provide a larger absolute dollar amount.
+
+#### 15.8.2 Sigmoid-Derived Buffer (§7.4)
+
+When the buffer is computed via sigmoid, $\text{buffer} = 1 + n_d \cdot \text{pc}$ where $\text{pc} = R_{\min} + \hat\sigma_{\alpha_d}(t) \cdot (\text{upper} - R_{\min})$. These derivatives remain unchanged:
 
 **With respect to $R_{\min}$:**
 
@@ -1066,13 +1271,10 @@ $$
 \frac{\partial\,\text{buffer}}{\partial R_{\max}} = n_d \cdot \hat\sigma_{\alpha_d}(t)
 $$
 
-**With respect to pump capital $T$** (through position delta $\delta = Pq/T$):
+**With respect to pump capital $T$** (through $\delta = Pq/T$):
 
 $$
-\frac{\partial \delta}{\partial T} = -\frac{Pq}{T^2} = -\frac{\delta}{T}
-$$
-
-$$
+\frac{\partial \delta}{\partial T} = -\frac{\delta}{T}, \qquad
 \frac{\partial t}{\partial \delta} = \frac{1}{(\delta + 1)^2}
 $$
 
@@ -1152,6 +1354,264 @@ The first term is the direct effect (higher surplus = higher profit per cycle). 
 | TP | $R_{\max}$ | $n_i \cdot P_{\text{ref}}$ | $+$ | Ceiling scales with reference |
 | TP | $r$ | $(\text{TP}_{\max}-\text{TP}_{\min})(1-2\hat\sigma)$ | $\pm$ | Warps TP distribution |
 | $\Pi_i$ | $s$ | $\text{Funding}_i \cdot (1-n_i) \cdot f_h \cdot \Delta t$ | $+$ | More surplus → more profit |
+
+---
+
+## 16. Project Structure
+
+```
+quant/
+├── Quant/                      # Desktop app (CLI + HTTP/web UI)
+│   ├── Quant.cpp               #   main() — CLI menu + HTTP server
+│   ├── QuantMath.h             #   Core math (overhead, sigmoid, serial plans)
+│   ├── TradeDatabase.h         #   JSON persistence (trades, entries, chains, wallet)
+│   ├── ProfitCalculator.h      #   Profit / ROI computation
+│   ├── MultiHorizonEngine.h    #   TP/SL horizon generation
+│   ├── MarketEntryCalculator.h #   Entry level distribution
+│   ├── ExitStrategyCalculator.h#   Exit sell distribution
+│   ├── Simulator.h             #   Forward simulation / backtesting
+│   ├── ChainOptimizer.h        #   BPTT chain parameter optimization
+│   ├── CudaAccelerator.h       #   GPU abstraction (#ifdef QUANT_CUDA)
+│   ├── CudaKernels.cu          #   CUDA simulation kernels
+│   ├── GpuLLM.h / .cu          #   MoE-Transformer + LSTM (GPU)
+│   ├── HttpApi.h               #   HTTP server bootstrap
+│   ├── HtmlHelpers.h           #   HTML rendering helpers
+│   ├── Routes_*.h              #   Web UI route handlers
+│   ├── Trade.h                 #   Trade types
+│   ├── IdGenerator.h           #   ID allocation
+│   ├── PriceSeries.h           #   Time-series price data
+│   ├── SymbolRegistry.h        #   Symbol name ↔ ID mapping
+│   ├── UserManager.h           #   Multi-user auth + sessions
+│   ├── AdminConfig.h           #   Admin settings
+│   ├── DiscussionLedger.h      #   Post-hoc trade analysis ledger
+│   ├── json.h                  #   nanojson3 (vendored)
+│   └── cpp-httplib-master/     #   cpp-httplib (vendored)
+│
+├── libquant/                   # Pure math library (header-only)
+│   └── include/
+│       └── quantmath.h         #   Standalone copy of QuantMath
+│
+├── libquant-engine/            # Backend engine library (C API)
+│   ├── include/
+│   │   ├── quant_engine.h      #   C API facade
+│   │   └── quant_engine_types.h#   Portable data types
+│   └── src/
+│       └── quant_engine.cpp    #   Implementation
+│
+├── quant-ui/                   # GUI provider library (virtual router)
+│   ├── include/
+│   │   └── quant_ui.h          #   C API: qui_get/qui_post → HTML
+│   ├── src/
+│   │   └── quant_ui.cpp        #   Page rendering (no HTTP dependency)
+│   ├── jni/
+│   │   └── quant_ui_jni.cpp    #   JNI bridge for Android
+│   ├── java/com/quant/ui/
+│   │   ├── QuantUI.java        #   Java virtual router API
+│   │   ├── UIResponse.java     #   Response DTO (html or redirect)
+│   │   └── QuantWebView.java   #   WebView with form interception
+│   └── CMakeLists.txt          #   Build
+│
+├── quant-android/              # Android JNI bridge (engine)
+│   ├── jni/
+│   │   └── quant_jni.cpp       #   JNI ↔ C API bridge
+│   ├── java/com/quant/engine/
+│   │   └── QuantEngine.java    #   Java native API
+│   └── CMakeLists.txt          #   NDK build
+│
+├── quant-app/                  # Android Studio project (ready to open)
+│   ├── settings.gradle         #   Gradle project config
+│   ├── app/
+│   │   ├── build.gradle        #   Module with NDK/CMake
+│   │   └── src/main/
+│   │       ├── cpp/CMakeLists.txt  # NDK build → libquant-native.so
+│   │       ├── AndroidManifest.xml
+│   │       └── java/com/quant/
+│   │           ├── app/MainActivity.java
+│   │           ├── ui/{QuantUI,QuantWebView,UIResponse}.java
+│   │           └── engine/QuantEngine.java
+│   └── gradle/wrapper/         #   Gradle wrapper config
+│
+├── CMakeLists.txt              # Root CMake (desktop + Android)
+├── Makefile                    # GNU Make (Linux / Termux)
+└── README.md                   # This document
+```
+
+### Architecture
+
+```
+┌─────────────┐   ┌──────────────┐   ┌─────────────────┐
+│ Quant (CLI)  │   │ Quant (HTTP) │   │ Android App     │
+│ Quant.cpp    │   │ Routes_*.h   │   │ (Java/Kotlin)   │
+└──────┬───────┘   └──────┬───────┘   └────────┬────────┘
+       │                  │                     │
+       │                  │              ┌──────┴────────┐
+       │                  │              │ QuantWebView  │
+       │                  │              │ (form routing)│
+       │                  │              └──────┬────────┘
+       │                  │                     │ JNI
+       │                  │              ┌──────┴────────┐
+       │                  │              │ quant_ui.h    │
+       │                  │              │ (virtual      │
+       │                  │              │  router)      │
+       │                  │              └──────┬────────┘
+       ▼                  ▼                     ▼
+┌──────────────────────────────┐   ┌────────────────────┐
+│ TradeDatabase / ProfitCalc   │   │ quant_engine.h     │
+│ Simulator / ChainOptimizer   │◄──│ (C API facade)     │
+│ QuantMath (core equations)   │   │ libquant-engine    │
+└──────────────────────────────┘   └────────────────────┘
+       │
+       ▼ (optional)
+┌──────────────────┐
+│ CudaKernels.cu   │
+│ GpuLLM.cu        │
+│ (#ifdef QUANT_CUDA)
+└──────────────────┘
+```
+
+---
+
+## 17. Building
+
+### Windows (Visual Studio)
+
+Open `Quant.sln`.  Build as Debug or Release.  CUDA is optional — controlled by the `QUANT_CUDA` preprocessor define and `.cu` files in the project.
+
+### Linux / Termux (Make)
+
+```bash
+# CPU-only (no CUDA)
+make
+
+# With GPU support
+make CUDA=1
+
+# Termux (Android terminal)
+pkg install clang make
+make CXX=clang++
+
+# Engine library only
+make engine
+```
+
+### CMake (cross-platform)
+
+```bash
+# Desktop
+cmake -B build
+cmake --build build
+
+# Android NDK (command-line)
+cmake -B build-android \
+  -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DQUANT_ANDROID=ON
+cmake --build build-android
+```
+
+### Android Studio
+
+Open `quant-app/` as an existing project in Android Studio.  The NDK/CMake integration is pre-configured — Gradle builds all C++ into `libquant-native.so` automatically.
+
+Requirements: Android Studio with NDK and CMake installed (SDK Manager → SDK Tools → NDK, CMake).
+
+### CUDA Isolation
+
+All GPU code is behind `#ifdef QUANT_CUDA`:
+
+- `CudaAccelerator.h` — real API when `QUANT_CUDA` defined, no-op stubs otherwise
+- `GpuLLM.h` — same pattern
+- `CudaKernels.cu` / `GpuLLM.cu` — only compiled when CUDA is enabled
+- `ChainOptimizer.h` — uses `CudaAccelerator` stubs transparently; CPU fallback path always available
+
+No CUDA headers or libraries are required for a CPU-only build.
+
+---
+
+## 18. Running
+
+The application starts both a **CLI menu** and an **HTTP web UI** simultaneously:
+
+```
+$ ./build/quant
+  [HTTP] listening on http://localhost:8080
+
+  QUANT TRADE MANAGER
+  ----------------------------------------
+   1) List trades
+   2) Add trade
+   ...
+  25) Serial generator
+  26) Chain operations
+  27) Simulator
+  ...
+   0) Exit
+  ----------------------------------------
+```
+
+### CLI Features
+
+| # | Feature | GUI Equivalent |
+|---|---------|----------------|
+| 1–5 | Trade CRUD | `/trades` |
+| 6 | Profit calculation | `/profit` |
+| 7–8 | Horizon generation & view | `/generate-horizons` |
+| 9 | Toggle stop-loss | `/trades` (edit) |
+| 10 | DCA tracker | `/dca` |
+| 11 | Portfolio summary | `/portfolio` |
+| 12 | Unrealized P&L | `/pnl` |
+| 14 | Price check (TP/SL vs market) | `/price-check` |
+| 15 | Market entry calculator | `/market-entry` |
+| 16 | Exit strategy | `/exit-strategy` |
+| 20 | Wallet (deposit/withdraw) | `/wallet` |
+| 21 | Pending exit orders | `/pending-exits` |
+| 23–24 | Entry points (view/mark traded) | `/entry-points` |
+| 25 | Serial generator | `/serial-generator` |
+| 26 | Chain operations | `/chains` |
+| 27 | Simulator | `/simulator` |
+| 28 | P&L ledger | `/pnl` |
+| 30 | Execute buy/sell | `/trades` (execute) |
+| 31 | Add exit strategy | `/exit-strategy` |
+| 33–34 | Chain advance/reset | `/chains/:id` |
+| 37 | hledger export | `/export-hledger` |
+| 38 | Price series | `/symbols` |
+
+### Web UI
+
+Navigate to `http://localhost:8080` in a browser.  All features from the CLI are available through the web interface plus:
+
+- **Chart** — interactive price + TP/SL visualization
+- **BPTT Optimizer** — gradient-based chain parameter optimization (GPU-accelerated when available)
+- **Chain Manager** — multi-chain CRUD, cycle management, entry progress tracking
+- **Premium / Admin** — multi-user support, payment processing
+
+### Android (future)
+
+The `quant-ui` virtual router provides the same web UI as the desktop HTTP server, but without any network dependency. On Android, `QuantWebView` renders pages locally and intercepts form submissions:
+
+```java
+// In your Activity's onCreate:
+QuantUI.init(getFilesDir().getAbsolutePath() + "/db", "Quant");
+
+QuantWebView webView = findViewById(R.id.webview);
+webView.navigateTo("/");   // renders the dashboard
+
+// That's it — all navigation, forms, and page rendering
+// is handled internally by the virtual router.
+// No HTTP server, no port listening.
+```
+
+For data-only access without UI (e.g. background sync, notifications):
+
+```java
+QuantEngine engine = new QuantEngine();
+engine.open(getFilesDir().getAbsolutePath() + "/db");
+double balance = engine.walletBalance();
+int chains = engine.chainCount();
+double oh = engine.overhead(price, qty, feeSpread, ...);
+```
+
+The Android app builds `libquant-engine` + `libquant-ui` as shared libraries via NDK CMake, then loads them through `QuantEngine.java` and `QuantUI.java`.
 | Buffer | $R_{\min}$ | $n_d(1-\hat\sigma)$ | $+$ | Floor raises buffer |
 | OH | $n_f$ | $\text{OH}/(1+n_f)$ | $+$ | Each future trade adds marginal overhead |
 | $\text{buffer}_{\text{sl}}$ | $\phi_{\text{sl}}$ | $n_{\text{sl}} \cdot \text{pc}$ | $+$ | More SL fraction → more TP inflation |
@@ -1379,3 +1839,425 @@ The system does not predict whether entries will trigger or TPs will be hit. It 
 The partial derivatives (§15) reveal that the surplus rate $s$ is the fundamental parameter — it has a constant, positive gradient on EO, making it the most predictable tuning knob. All other costs (fees, hedging, spread) are engineering details that the overhead formula absorbs. As capital grows across chain cycles, overhead vanishes, and the system converges to its theoretical limit: a cycle machine generating $s$% per round.
 
 The gradient-based optimisation framework (§16) enables automatic parameter tuning. The chain compounding gradient has the structure of backpropagation through time — each cycle is a "layer" and the gradient flows backward through the recurrence relation. This means standard deep learning optimisation techniques (gradient clipping, learning rate scheduling, momentum) apply directly. The five objective functions cover the full spectrum from conservative (MinSpread) to aggressive (MaxChain), with MaxWealth as the true terminal objective that reveals the optimal savings extraction rate as a balance point between two opposing gradients.
+
+---
+
+## 18. CUDA Backpropagation Architecture (GpuLLM)
+
+The system includes a GPU-accelerated Sparse MoE-Transformer with LSTM-gated expert routing, implemented in CUDA with manual backward kernels. This section documents the architecture and gradient flow.
+
+### 18.1 Model Architecture
+
+Each decoder block follows the pattern:
+
+$$
+\text{LayerNorm} \to \text{Causal MHA} \to \text{Residual} \to \text{LayerNorm} \to \text{LSTM Router} \to \text{Top-K MoE FFN} \to \text{Residual}
+$$
+
+**Configuration** (`LlmConfig`):
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `inputDim` | 8 | Raw feature vector (OHLCV + indicators) |
+| `dModel` | 256 | Embedding / hidden dimension |
+| `nHeads` | 4 | Multi-head attention heads |
+| `nLayers` | 6 | Decoder blocks |
+| `nExperts` | 8 | MoE experts per layer |
+| `topK` | 2 | Active experts per token |
+| `lstmHidden` | 128 | LSTM router hidden state |
+| `seqLen` | 512 | Max context window |
+| `ffnDim` | 512 | Expert FFN intermediate dim |
+| `outputDim` | 1 | Output size (scalar for price prediction) |
+
+**Total parameters:**
+
+$$
+|\theta| = \underbrace{d_{\text{in}} \cdot D + D}_{\text{embedding}}
++ L \cdot \left(
+\underbrace{2D}_{\text{LN1}}
++ \underbrace{D \cdot 3D + 3D}_{\text{QKV}}
++ \underbrace{D^2 + D}_{\text{Wo}}
++ \underbrace{2D}_{\text{LN2}}
++ \underbrace{D \cdot 4H + H \cdot 4H + 4H}_{\text{LSTM}}
++ \underbrace{H \cdot E + E}_{\text{Router}}
++ \underbrace{E(DF + F + FD + D)}_{\text{Experts}}
+\right)
++ \underbrace{D \cdot d_{\text{out}} + d_{\text{out}}}_{\text{Output head}}
+$$
+
+### 18.2 Forward Pass
+
+The forward pass (`llmForward`) is fully GPU-resident. All matrix operations use cuBLAS `cublasDgemm` in row-major layout.
+
+**Embedding:**
+
+$$
+\mathbf{E} = \mathbf{X} \mathbf{W}_e + \mathbf{b}_e \qquad [\text{seqLen} \times D]
+$$
+
+**Per-layer ($l = 0, \ldots, L-1$):**
+
+1. **LayerNorm 1** (per-row):
+
+$$
+\hat{x}_r = \frac{x_r - \mu_r}{\sqrt{\sigma_r^2 + \varepsilon}} \cdot \gamma + \beta
+$$
+
+2. **QKV Projection:**
+
+$$
+[\mathbf{Q}, \mathbf{K}, \mathbf{V}] = \text{LN}_1(\mathbf{h}) \cdot \mathbf{W}_{qkv} + \mathbf{b}_{qkv} \qquad [S \times 3D]
+$$
+
+3. **Causal Multi-Head Attention** (per head $h$):
+
+$$
+\mathbf{A}_h = \text{softmax}\!\left(\frac{\mathbf{Q}_h \mathbf{K}_h^\top}{\sqrt{d_h}} + \mathbf{M}_{\text{causal}}\right) \cdot \mathbf{V}_h
+$$
+
+4. **Output Projection + Residual:**
+
+$$
+\mathbf{h}' = \mathbf{h} + \mathbf{A} \cdot \mathbf{W}_o + \mathbf{b}_o
+$$
+
+5. **LayerNorm 2** on $\mathbf{h}'$.
+
+6. **LSTM Router** (sequential over time):
+
+$$
+\mathbf{g}_t = \sigma(\mathbf{W}_{ih} \mathbf{x}_t + \mathbf{W}_{hh} \mathbf{h}_{t-1} + \mathbf{b})
+$$
+
+$$
+\mathbf{c}_t = \mathbf{f}_t \odot \mathbf{c}_{t-1} + \mathbf{i}_t \odot \tilde{\mathbf{c}}_t, \qquad
+\mathbf{h}_t = \mathbf{o}_t \odot \tanh(\mathbf{c}_t)
+$$
+
+7. **Top-K Expert Routing:**
+
+$$
+\text{logits} = \mathbf{h}_{\text{lstm}} \cdot \mathbf{W}_r + \mathbf{b}_r, \qquad
+\text{weights} = \text{softmax}(\text{logits}), \qquad
+\text{select top-}K
+$$
+
+8. **Expert FFN** (per selected expert):
+
+$$
+\mathbf{m} = \text{GELU}(\mathbf{x} \cdot \mathbf{W}_1^{(e)} + \mathbf{b}_1^{(e)}), \qquad
+\mathbf{y} = \mathbf{m} \cdot \mathbf{W}_2^{(e)} + \mathbf{b}_2^{(e)}
+$$
+
+9. **MoE Combine + Residual:**
+
+$$
+\mathbf{h}_{\text{out}} = \mathbf{h}' + \sum_{k} w_k \cdot \mathbf{y}_{e_k}
+$$
+
+**Output Head:**
+
+$$
+\hat{\mathbf{y}} = \mathbf{h}_{\text{final}} \cdot \mathbf{W}_{\text{out}} + \mathbf{b}_{\text{out}} \qquad [S \times d_{\text{out}}]
+$$
+
+### 18.3 Backward Pass (Manual Gradient Kernels)
+
+The backward pass (`llmBackward`) is implemented entirely in CUDA with manual gradient computation — no automatic differentiation engine. All GEMM backward operations use `cublasDgemm` with transposed operands. Element-wise backward operations use custom CUDA kernels.
+
+**Loss:** MSE on last sequence position:
+
+$$
+\mathcal{L} = \frac{1}{d_{\text{out}}} \sum_{j=1}^{d_{\text{out}}} (\hat{y}_{S,j} - y_j^*)^2
+$$
+
+$$
+\frac{\partial \mathcal{L}}{\partial \hat{y}_{S,j}} = \frac{2(\hat{y}_{S,j} - y_j^*)}{d_{\text{out}}}
+$$
+
+**Gradient flow (reverse order):**
+
+```
+dLoss
+  │
+  ├── Output head backward:
+  │     dW_out += h_final^T · dFinalOut     (llmGemmAT)
+  │     db_out += sum(dFinalOut)             (llmBiasGradKernel)
+  │     dCurInput = dFinalOut · W_out^T      (llmGemmBT)
+  │
+  ├── Per-layer (L-1 → 0):
+  │     │
+  │     ├── MoE Combine backward:
+  │     │     dExpertOut[t,k] = w[t,k] · dMoeOut[t]   (copy + llmScaleKernel)
+  │     │
+  │     ├── Expert FFN backward (per expert e):
+  │     │     dMid = dExpertOut · W2_e^T               (llmGemmBT)
+  │     │     dW2_e += mid^T · dExpertOut              (llmGemmAT)
+  │     │     db2_e += sum(dExpertOut)                  (llmBiasGradKernel)
+  │     │     dMid *= GELU'(mid)                       (llmGeluBwdKernel)
+  │     │     dW1_e += in^T · dMid                     (llmGemmAT)
+  │     │     db1_e += sum(dMid)                        (llmBiasGradKernel)
+  │     │
+  │     ├── Residual: dPostAttn += dCurInput
+  │     │
+  │     ├── LayerNorm 2 backward:                      (llmLayerNormBwdKernel)
+  │     │     dLn2In, dGamma2, dBeta2
+  │     │
+  │     ├── Attention output projection backward:
+  │     │     dW_o += attn_out^T · dAttnProj           (llmGemmAT)
+  │     │     db_o += sum(dAttnProj)                    (llmBiasGradKernel)
+  │     │     dAttnOut = dAttnProj · W_o^T             (llmGemmBT)
+  │     │
+  │     ├── LayerNorm 1 backward:                      (llmLayerNormBwdKernel)
+  │     │     dInput, dGamma1, dBeta1
+  │     │
+  │     └── Residual: dInput += dLn2In
+  │
+  └── Embedding backward:
+        dW_e += X^T · dCurInput                        (llmGemmAT)
+        db_e += sum(dCurInput)                          (llmBiasGradKernel)
+```
+
+### 18.4 Adam Optimiser
+
+All parameter updates use bias-corrected Adam on GPU (`llmAdamKernel`):
+
+$$
+m_i \leftarrow \beta_1 m_i + (1 - \beta_1) g_i
+$$
+
+$$
+v_i \leftarrow \beta_2 v_i + (1 - \beta_2) g_i^2
+$$
+
+$$
+\hat{m}_i = \frac{m_i}{1 - \beta_1^t}, \qquad \hat{v}_i = \frac{v_i}{1 - \beta_2^t}
+$$
+
+$$
+\theta_i \leftarrow \theta_i - \eta \cdot \frac{\hat{m}_i}{\sqrt{\hat{v}_i} + \varepsilon}
+$$
+
+with $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\varepsilon = 10^{-8}$.
+
+### 18.5 VRAM Guardrails
+
+Before any `cudaMalloc`, the system pre-calculates the total VRAM required (`llmEstimateVram`) and checks against free VRAM via `cudaMemGetInfo`:
+
+$$
+\text{VRAM}_{\text{total}} = 4 \cdot |\theta| \cdot 8 + \text{cache}_{\text{per-layer}} \cdot L + \text{workspace}
+$$
+
+The factor of 4 covers: parameters + gradients + Adam first moment + Adam second moment. A 64 MB safety buffer is added. If $\text{VRAM}_{\text{required}} + \text{safety} > \text{VRAM}_{\text{free}}$, initialisation aborts with a diagnostic error message before any allocation occurs.
+
+### 18.6 Backward Pass — Known Limitations
+
+The current backward pass has two documented approximations:
+
+1. **Attention backward is approximate.** The gradient through $\text{softmax}(\mathbf{Q}\mathbf{K}^\top / \sqrt{d})\mathbf{V}$ skips the full $d\mathbf{Q}$, $d\mathbf{K}$, $d\mathbf{V}$ computation through the softmax Jacobian. Instead, the gradient from $\mathbf{W}_o$ is passed directly to the LayerNorm 1 backward. This means $\mathbf{W}_{qkv}$ and $\mathbf{b}_{qkv}$ receive attenuated gradients. The LSTM router backward kernel (`llmLstmGateBwdKernel`) exists but is not yet wired into the main `llmBackward()` loop — the BPTT unrolling over sequence positions is pending.
+
+2. **GELU backward uses post-activation values.** The expert FFN caches $\text{GELU}(\mathbf{m})$ (post-activation) rather than $\mathbf{m}$ (pre-activation). The backward pass evaluates $\text{GELU}'$ at the post-activation value, which introduces a small approximation error. This is acceptable for early training but will be corrected by caching pre-GELU activations.
+
+### 18.7 Weight Persistence
+
+Model weights are serialised as a binary file:
+
+```
+[LlmConfig struct][Adam step counter (int)][flat double array of all parameters]
+```
+
+The flat parameter array follows the same layout as `llmAssignWeightPtrs`: embedding → per-layer (LN1, QKV, Wo, LN2, LSTM, Router, Experts) → output head. LSTM hidden state can be saved/loaded separately for online inference continuity.
+
+### 18.8 Relationship to the Trading Framework
+
+The GpuLLM model operates *alongside* the deterministic framework (§1–§16), not *within* it. The deterministic equations guarantee fee neutrality regardless of any model prediction. The LLM's role is advisory — it processes price sequences through the MoE-Transformer and produces a scalar forecast. The trading decisions (entries, exits, TP levels) remain governed by the sigmoid-based overhead equations.
+
+The LSTM router provides temporal memory that carries across inference calls — each new price tick updates the hidden state without re-training. This is analogous to the chain compounding recurrence (§15.9) where each cycle carries forward capital state. The parallel between the two systems is structural:
+
+| Trading Framework | GpuLLM |
+|---|---|
+| Chain cycle $c$ | Transformer layer $l$ |
+| Capital $T_c$ | Hidden state $\mathbf{h}_l$ |
+| Overhead gradient $dT_c/d\theta$ | Loss gradient $d\mathcal{L}/d\theta_l$ |
+| BPTT through chain recurrence | BPTT through LSTM time steps |
+| Adam on $\theta_{\text{trading}}$ | Adam on $\theta_{\text{model}}$ |
+
+---
+
+## 19. Probabilistic Antithesis — Why Breaking Determinism Fails
+
+This section formally derives the failure modes of a hypothetical regime that intentionally sacrifices the deterministic guarantee (§1.2) for higher trade throughput. It serves as a rigorous benchmark for *why* the overhead-neutral framework exists.
+
+### 19.1 The Regime
+
+Consider a strategy ("the Chef's model") that:
+
+1. **Ignores fee hedging.** TP targets are set at a fixed percentage above entry without embedding overhead. Fees are treated as a post-hoc drag.
+2. **Uses leveraged entries.** Capital is borrowed at interest rate $r_{\text{int}}$ to amplify position size.
+3. **Targets high throughput.** Entries trigger aggressively on small price dips, with tight TPs and no buffer.
+
+The operating assumption: *if enough TPs hit, the aggregate profit exceeds the aggregate fees and interest costs.* This is a probabilistic bet, not a deterministic guarantee.
+
+### 19.2 The Insolvency Boundary
+
+Define:
+
+- $P_e$ — entry price
+- $\phi$ — fractional TP distance above entry (e.g., $\phi = 0.02$ for 2%)
+- $\sigma$ — annualised market volatility
+- $\mathcal{F}$ — round-trip fee fraction (buy + sell)
+- $r_{\text{int}}$ — interest rate on borrowed capital (per holding period)
+- $q$ — position quantity
+- $T_{\text{hold}}$ — expected holding time (periods)
+
+**Profit per successful TP hit:**
+
+$$
+\Pi_{\text{hit}} = P_e \cdot q \cdot (\phi - \mathcal{F})
+$$
+
+**Cost per holding period (interest):**
+
+$$
+C_{\text{int}} = P_e \cdot q \cdot r_{\text{int}} \cdot T_{\text{hold}}
+$$
+
+**Net per trade:**
+
+$$
+\Pi_{\text{net}} = P_e \cdot q \cdot (\phi - \mathcal{F} - r_{\text{int}} \cdot T_{\text{hold}})
+$$
+
+**Insolvency condition:** $\Pi_{\text{net}} \leq 0$, i.e.:
+
+$$
+\boxed{
+\phi \leq \mathcal{F} + r_{\text{int}} \cdot T_{\text{hold}}
+}
+$$
+
+When the TP distance is less than or equal to fees plus interest, every trade loses money. This is the **insolvency boundary**: a hard wall in $(\phi, r_{\text{int}}, T_{\text{hold}})$ space below which the strategy is provably unprofitable regardless of hit rate.
+
+### 19.3 Probability of Insolvency
+
+Assume price follows geometric Brownian motion: $dP = \mu P \, dt + \sigma P \, dW$. The probability that the TP at $P_e(1 + \phi)$ is hit before a drawdown of $\psi$ (margin call threshold):
+
+$$
+P(\text{TP hit first}) = \frac{1 - e^{-2\mu\psi/\sigma^2}}{e^{2\mu\phi/\sigma^2} - e^{-2\mu\psi/\sigma^2}}
+$$
+
+For $\mu \approx 0$ (no drift), this simplifies to:
+
+$$
+P(\text{TP hit first}) \approx \frac{\psi}{\phi + \psi}
+$$
+
+The expected holding time conditional on TP hit:
+
+$$
+\mathbb{E}[T_{\text{hold}} \mid \text{TP hit}] \approx \frac{\phi \cdot \psi}{\sigma^2}
+$$
+
+**Probability of insolvency over $N$ trades:**
+
+$$
+P(\text{insolvency after } N) = 1 - \left(\frac{\psi}{\phi + \psi}\right)^N \cdot \left(1 - \frac{\mathcal{F} + r_{\text{int}} \cdot \phi\psi/\sigma^2}{\phi}\right)^N
+$$
+
+As $N \to \infty$, insolvency is almost certain unless $\phi \gg \mathcal{F} + r_{\text{int}} \cdot \phi\psi/\sigma^2$. The volatility $\sigma$ controls how fast the boundary is reached.
+
+### 19.4 Expected Surplus Comparison
+
+**Deterministic surplus** (our framework, §3.3):
+
+$$
+s_{\text{det}} = s \cdot f_h \cdot \Delta t \quad \text{(per trade, guaranteed if TP is hit)}
+$$
+
+This is a *conditional guarantee*: if TP is hit, the surplus is exactly $s_{\text{det}}$, with probability 1 conditional on the event.
+
+**Expected surplus** (Chef's model):
+
+$$
+s_{\text{exp}} = P(\text{TP hit}) \cdot (\phi - \mathcal{F} - r_{\text{int}} \cdot \mathbb{E}[T_{\text{hold}}]) - P(\text{SL hit}) \cdot \psi
+$$
+
+Substituting the GBM probabilities:
+
+$$
+s_{\text{exp}} = \frac{\psi}{\phi + \psi} \cdot \left(\phi - \mathcal{F} - \frac{r_{\text{int}} \cdot \phi\psi}{\sigma^2}\right) - \frac{\phi}{\phi + \psi} \cdot \psi
+$$
+
+$$
+= \frac{1}{\phi + \psi}\left[\psi\phi - \psi\mathcal{F} - \frac{r_{\text{int}} \cdot \phi\psi^2}{\sigma^2} - \phi\psi\right]
+$$
+
+$$
+\boxed{
+s_{\text{exp}} = \frac{-\psi}{\phi + \psi}\left(\mathcal{F} + \frac{r_{\text{int}} \cdot \phi\psi}{\sigma^2}\right)
+}
+$$
+
+**This is always negative.** Under zero-drift GBM with fees and interest, the expected surplus of the leveraged probabilistic strategy is *unconditionally* negative. The fee and interest terms cannot be recovered probabilistically — they are a deterministic drag that the strategy has no mechanism to hedge.
+
+Contrast with the deterministic framework where $s_{\text{det}} \geq 0$ always (guaranteed by construction whenever TP is hit).
+
+### 19.5 The Zero-Sum Trap
+
+**Theorem.** *The Chef's strategy becomes a zero-sum trap when interest costs exceed TP revenue — specifically when:*
+
+$$
+\boxed{
+r_{\text{int}} \geq \frac{(\phi - \mathcal{F}) \cdot \sigma^2}{\phi \cdot \psi}
+}
+$$
+
+**Proof.** Revenue per cycle at TP hit: $R = P_e q (\phi - \mathcal{F})$. Interest cost per cycle: $I = P_e q \cdot r_{\text{int}} \cdot \mathbb{E}[T_{\text{hold}}] = P_e q \cdot r_{\text{int}} \cdot \phi\psi / \sigma^2$.
+
+Setting $I \geq R$:
+
+$$
+r_{\text{int}} \cdot \frac{\phi\psi}{\sigma^2} \geq \phi - \mathcal{F}
+$$
+
+$$
+r_{\text{int}} \geq \frac{(\phi - \mathcal{F}) \cdot \sigma^2}{\phi \cdot \psi}
+$$
+
+Above this threshold, even trades that hit their TP lose money to interest. The strategy has negative expected return on *every path* — TP hit or SL hit. $\square$
+
+**Numerical example:** $\phi = 2\%$, $\mathcal{F} = 0.2\%$, $\sigma = 50\%$ annualised, $\psi = 5\%$:
+
+$$
+r_{\text{int}} \geq \frac{(0.02 - 0.002) \cdot 0.25}{0.02 \cdot 0.05} = \frac{0.0045}{0.001} = 4.5\%
+$$
+
+At 4.5% interest per holding period, every trade is a loss. On perpetual futures with typical 0.01%/8h funding rates (≈0.03%/day), $T_{\text{hold}} > 150$ days reaches this threshold — but leveraged strategies that get stuck in drawdowns routinely exceed this.
+
+### 19.6 Why Our Framework Is Immune
+
+The deterministic framework (§1–§16) avoids every failure mode of the probabilistic regime:
+
+| Property | Deterministic (Ours) | Probabilistic (Chef's) |
+|----------|---------------------|----------------------|
+| Fee coverage | Embedded in TP *a priori* | Post-hoc drag |
+| Interest exposure | None (no leverage required) | Proportional to holding time |
+| Surplus sign | $s_{\text{det}} \geq 0$ (guaranteed) | $s_{\text{exp}} < 0$ (always, under GBM) |
+| Insolvency boundary | Does not exist (no leverage) | $\phi \leq \mathcal{F} + r_{\text{int}} T_{\text{hold}}$ |
+| Downtrend buffer | Funds fractional re-entry (§7.2.1) | None — drawdown = loss |
+| TP hit → profit | **Unconditionally true** | True only if $r_{\text{int}} < (\phi - \mathcal{F})\sigma^2/(\phi\psi)$ |
+| $N \to \infty$ | Wealth grows (§9.3, chain compounding) | Insolvency approaches certainty |
+
+The framework does not predict whether TPs will be hit. But it guarantees that *when they are*, every fee is covered, the surplus is captured, and the next cycle is funded. The Chef's model makes the opposite trade-off: it predicts that TPs will hit *often enough* to overcome fees and interest — and as §19.4 proves, this prediction fails under zero-drift conditions.
+
+### 19.7 The Fundamental Asymmetry
+
+The deterministic framework exploits a structural asymmetry:
+
+$$
+P(\text{surplus} \mid \text{TP hit}) = 1 \quad \text{vs.} \quad \mathbb{E}[\text{surplus}] = P(\text{TP hit}) \cdot s_{\text{det}}
+$$
+
+The surplus is *conditional* on TP being hit, but within that condition it is certain. The expected surplus across all paths is $P(\text{TP hit}) \cdot s_{\text{det}} > 0$ — always positive because $s_{\text{det}} > 0$ and $P(\text{TP hit}) > 0$ for any non-degenerate market.
+
+The Chef's model has no such asymmetry to exploit. Its surplus is probabilistic in both the occurrence *and* the magnitude, with a negative-definite expectation under realistic fee and interest assumptions. The attempt to increase throughput by removing the deterministic constraint removes the only source of guaranteed positive expectation.

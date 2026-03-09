@@ -28,6 +28,22 @@ public:
         seedIdGenerators();
     }
 
+    // Diagnostic helpers so routes can report which on-disk DB is in use.
+    std::string baseDir() const
+    {
+        std::error_code ec;
+        auto p = std::filesystem::absolute(m_dir, ec);
+        if (ec) return m_dir;
+        return p.lexically_normal().string();
+    }
+    std::string tradesFilePath() const
+    {
+        std::error_code ec;
+        auto p = std::filesystem::absolute(tradesPath(), ec);
+        if (ec) return tradesPath();
+        return p.lexically_normal().string();
+    }
+
     // Populate ID generators from existing data on disk so that
     // acquire() finds the lowest free ID (gap-filling reuse).
     void seedIdGenerators()
@@ -98,9 +114,9 @@ public:
             if (t.parentTradeId == tradeId)
                 idsToRemove.push_back(t.tradeId);
 
-        std::erase_if(all, [&](const Trade& t) {
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const Trade& t) {
             return std::find(idsToRemove.begin(), idsToRemove.end(), t.tradeId) != idsToRemove.end();
-        });
+        }), all.end());
         saveTrades(all);
 
         // Release IDs back to the pool
@@ -108,9 +124,9 @@ public:
             m_tradeIdGen.release(id);
 
         auto hl = loadAllHorizons();
-        std::erase_if(hl, [&](const std::tuple<std::string, int, HorizonLevel>& e) {
+        hl.erase(std::remove_if(hl.begin(), hl.end(), [&](const std::tuple<std::string, int, HorizonLevel>& e) {
             return std::find(idsToRemove.begin(), idsToRemove.end(), std::get<1>(e)) != idsToRemove.end();
-        });
+        }), hl.end());
         saveAllHorizons(hl);
     }
 
@@ -198,9 +214,9 @@ public:
                            const std::vector<HorizonLevel>& levels)
     {
         auto all = loadAllHorizons();
-        std::erase_if(all, [&](const std::tuple<std::string, int, HorizonLevel>& e) {
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const std::tuple<std::string, int, HorizonLevel>& e) {
             return std::get<0>(e) == symbol && std::get<1>(e) == tradeId;
-        });
+        }), all.end());
         for (const auto& lv : levels)
             all.emplace_back(symbol, tradeId, lv);
         saveAllHorizons(all);
@@ -456,7 +472,7 @@ public:
     void removePendingExit(int orderId)
     {
         auto all = loadPendingExits();
-        std::erase_if(all, [orderId](const PendingExit& o) { return o.orderId == orderId; });
+        all.erase(std::remove_if(all.begin(), all.end(), [orderId](const PendingExit& o) { return o.orderId == orderId; }), all.end());
         savePendingExits(all);
         m_pendingIdGen.release(orderId);
     }
@@ -759,25 +775,63 @@ public:
     {
         if (symbol.empty()) return -1;
 
-        double remaining = holdingsForSymbol(symbol);
-        if (sellQty > remaining + 1e-9) return -1;
-        if (sellQty > remaining) sellQty = remaining;
+        // Build FIFO buy lots with currently available quantity so sells can be linked
+        // to parent buys. This keeps sold/remaining and deployed accounting correct.
+        auto allTrades = loadTrades();
+        struct BuyLot { int tradeId; double available; };
+        std::vector<BuyLot> lots;
+        lots.reserve(allTrades.size());
 
-        Trade sell;
-        sell.tradeId       = nextTradeId();
-        sell.symbol        = symbol;
-        sell.type          = TradeType::CoveredSell;
-        sell.value         = sellPrice;
-        sell.quantity      = sellQty;
-        sell.parentTradeId = -1;
-        sell.sellFee       = sellFee;
-        sell.timestamp     = static_cast<long long>(std::time(nullptr));
-        addTrade(sell);
+        for (const auto& t : allTrades)
+        {
+            if (t.type != TradeType::Buy || t.symbol != symbol) continue;
+            double sold = soldQuantityForParent(t.tradeId);
+            double released = releasedForTrade(t.tradeId);
+            double available = t.quantity - sold - released;
+            if (available > 1e-9)
+                lots.push_back({t.tradeId, available});
+        }
+
+        std::sort(lots.begin(), lots.end(), [](const BuyLot& a, const BuyLot& b) {
+            return a.tradeId < b.tradeId;
+        });
+
+        double totalAvailable = 0.0;
+        for (const auto& lot : lots) totalAvailable += lot.available;
+        if (sellQty > totalAvailable + 1e-9) return -1;
+        if (sellQty > totalAvailable) sellQty = totalAvailable;
+
+        double qtyToAllocate = sellQty;
+        int firstSellId = -1;
+        long long ts = static_cast<long long>(std::time(nullptr));
+
+        for (const auto& lot : lots)
+        {
+            if (qtyToAllocate <= 1e-9) break;
+            double q = std::min(qtyToAllocate, lot.available);
+            if (q <= 1e-9) continue;
+
+            Trade sell;
+            sell.tradeId       = nextTradeId();
+            sell.symbol        = symbol;
+            sell.type          = TradeType::CoveredSell;
+            sell.value         = sellPrice;
+            sell.quantity      = q;
+            sell.parentTradeId = lot.tradeId;
+            sell.sellFee       = (sellQty > 0.0) ? (sellFee * (q / sellQty)) : 0.0;
+            sell.timestamp     = ts;
+            addTrade(sell);
+
+            if (firstSellId < 0) firstSellId = sell.tradeId;
+            qtyToAllocate -= q;
+        }
+
+        if (qtyToAllocate > 1e-8) return -1;
 
         double proceeds = sellPrice * sellQty - sellFee;
         deposit(proceeds);
 
-        return sell.tradeId;
+        return firstSellId;
     }
 
     // Per-trade sell: validates against a specific parent Buy trade's remaining qty
@@ -1106,6 +1160,8 @@ tr:nth-child(even){background:#0f1b2d}
         bool   generateStopLosses         = false;
         double rangeAbove                 = 0.0;
         double rangeBelow                 = 0.0;
+        double rangeAbovePerDt            = 0.0;
+        double rangeBelowPerDt            = 0.0;
         int    futureTradeCount           = 0;
         double stopLossFraction           = 1.0;
         int    stopLossHedgeCount         = 0;
@@ -1135,6 +1191,8 @@ tr:nth-child(even){background:#0f1b2d}
             j["generateStopLosses"] = JB(m.generateStopLosses);
             j["rangeAbove"] = JD(m.rangeAbove);
             j["rangeBelow"] = JD(m.rangeBelow);
+            j["rangeAbovePerDt"] = JD(m.rangeAbovePerDt);
+            j["rangeBelowPerDt"] = JD(m.rangeBelowPerDt);
             j["futureTradeCount"] = JI(m.futureTradeCount);
             j["stopLossFraction"] = JD(m.stopLossFraction);
             j["stopLossHedgeCount"] = JI(m.stopLossHedgeCount);
@@ -1170,6 +1228,8 @@ tr:nth-child(even){background:#0f1b2d}
             m.generateStopLosses    = gb(item, "generateStopLosses");
             m.rangeAbove            = gd(item, "rangeAbove");
             m.rangeBelow            = gd(item, "rangeBelow");
+            m.rangeAbovePerDt       = gd(item, "rangeAbovePerDt");
+            m.rangeBelowPerDt       = gd(item, "rangeBelowPerDt");
             m.futureTradeCount      = gi(item, "futureTradeCount");
             m.stopLossFraction      = gd(item, "stopLossFraction");
             m.stopLossHedgeCount    = gi(item, "stopLossHedgeCount");
@@ -1182,7 +1242,7 @@ tr:nth-child(even){background:#0f1b2d}
     {
         auto all = loadParamModels();
         // overwrite if name already exists
-        std::erase_if(all, [&](const ParamModel& m) { return m.name == model.name; });
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const ParamModel& m) { return m.name == model.name; }), all.end());
         all.push_back(model);
         saveParamModels(all);
     }
@@ -1190,7 +1250,7 @@ tr:nth-child(even){background:#0f1b2d}
     void removeParamModel(const std::string& name)
     {
         auto all = loadParamModels();
-        std::erase_if(all, [&](const ParamModel& m) { return m.name == name; });
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const ParamModel& m) { return m.name == name; }), all.end());
         saveParamModels(all);
     }
 
@@ -1355,6 +1415,109 @@ tr:nth-child(even){background:#0f1b2d}
         saveChainMembers(all);
     }
 
+    // ---- Multi-Chain Manager ----
+
+    struct ManagedChain
+    {
+        int         chainId       = 0;
+        std::string name;
+        std::string symbol;
+        bool        active        = false;   // confirmed / live
+        bool        theoretical   = true;    // not yet activated
+        int         currentCycle  = 0;
+        double      capital       = 0.0;     // starting capital for this chain
+        double      totalSavings  = 0.0;
+        double      savingsRate   = 0.0;
+        std::string createdAt;
+        std::string notes;
+
+        // Entry IDs belonging to this chain, grouped by cycle
+        struct CycleEntries { int cycle = 0; std::vector<int> entryIds; };
+        std::vector<CycleEntries> cycles;
+    };
+
+    void saveManagedChains(const std::vector<ManagedChain>& chains)
+    {
+        njs3::js_array arr;
+        for (const auto& c : chains)
+        {
+            njs3::json j(njs3::js_object{});
+            j["chainId"]      = JI(c.chainId);
+            j["name"]         = JStr(c.name);
+            j["symbol"]       = JStr(c.symbol);
+            j["active"]       = JB(c.active);
+            j["theoretical"]  = JB(c.theoretical);
+            j["currentCycle"] = JI(c.currentCycle);
+            j["capital"]      = JD(c.capital);
+            j["totalSavings"] = JD(c.totalSavings);
+            j["savingsRate"]  = JD(c.savingsRate);
+            j["createdAt"]    = JStr(c.createdAt);
+            j["notes"]        = JStr(c.notes);
+
+            njs3::js_array cyArr;
+            for (const auto& cy : c.cycles)
+            {
+                njs3::json cj(njs3::js_object{});
+                cj["cycle"] = JI(cy.cycle);
+                njs3::js_array ids;
+                for (int id : cy.entryIds)
+                    ids.push_back(JI(id));
+                cj["entryIds"] = njs3::json(std::move(ids));
+                cyArr.push_back(std::move(cj));
+            }
+            j["cycles"] = njs3::json(std::move(cyArr));
+            arr.push_back(std::move(j));
+        }
+        writeJson(managedChainsPath(), njs3::json(std::move(arr)));
+    }
+
+    std::vector<ManagedChain> loadManagedChains() const
+    {
+        std::vector<ManagedChain> out;
+        auto j = readJsonArr(managedChainsPath());
+        const auto* a = j.as_array();
+        if (!a) return out;
+        for (const auto& item : *a)
+        {
+            ManagedChain c;
+            c.chainId      = gi(item, "chainId");
+            c.name         = gs(item, "name");
+            c.symbol       = gs(item, "symbol");
+            c.active       = gb(item, "active");
+            c.theoretical  = gb(item, "theoretical");
+            c.currentCycle = gi(item, "currentCycle");
+            c.capital      = gd(item, "capital");
+            c.totalSavings = gd(item, "totalSavings");
+            c.savingsRate  = gd(item, "savingsRate");
+            c.createdAt    = gs(item, "createdAt");
+            c.notes        = gs(item, "notes");
+
+            const auto* cyArr = item["cycles"]->as_array();
+            if (cyArr)
+                for (const auto& cy : *cyArr)
+                {
+                    ManagedChain::CycleEntries ce;
+                    ce.cycle = gi(cy, "cycle");
+                    const auto* ids = cy["entryIds"]->as_array();
+                    if (ids)
+                        for (const auto& id : *ids)
+                            ce.entryIds.push_back(static_cast<int>(id.get_integer_or(0LL)));
+                    c.cycles.push_back(ce);
+                }
+            out.push_back(c);
+        }
+        return out;
+    }
+
+    int nextChainId()
+    {
+        auto chains = loadManagedChains();
+        int maxId = 0;
+        for (const auto& c : chains)
+            if (c.chainId > maxId) maxId = c.chainId;
+        return maxId + 1;
+    }
+
     void clearAll()
     {
         // Remove JSON files
@@ -1371,6 +1534,7 @@ tr:nth-child(even){background:#0f1b2d}
         std::filesystem::remove(chainStatePath());
         std::filesystem::remove(chainMembersPath());
         std::filesystem::remove(exitPointsPath());
+        std::filesystem::remove(managedChainsPath());
         // Also remove legacy CSV files if present
         for (const char* ext : {".csv"})
         {
@@ -1402,6 +1566,7 @@ IdGenerator  m_exitIdGen;
     std::string chainStatePath()   const { return m_dir + "/chain_state.json"; }
     std::string chainMembersPath() const { return m_dir + "/chain_members.json"; }
     std::string exitPointsPath()   const { return m_dir + "/exit_points.json"; }
+    std::string managedChainsPath() const { return m_dir + "/managed_chains.json"; }
 
     // ---- JSON I/O helpers ----
     static njs3::json readJsonArr(const std::string& path)
@@ -1428,6 +1593,10 @@ IdGenerator  m_exitIdGen;
         if (!f) throw std::runtime_error("Cannot open " + path);
         f << njs3::serialize_json(j, njs3::json_serialize_option::pretty,
             njs3::json_floating_format_options{std::chars_format::general, 17});
+        f.flush();
+        if (!f.good()) throw std::runtime_error("Write failed for " + path);
+        f.close();
+        if (f.fail()) throw std::runtime_error("Close failed for " + path);
     }
     // Value constructors
     static njs3::json JI(int v)                { return njs3::json(static_cast<njs3::js_integer>(v)); }

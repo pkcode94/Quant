@@ -48,10 +48,17 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='number' name='entrySteepness' step='any' value='6.0'><br>"
              "<label>Entry Levels</label>"
              "<input type='number' name='entryLevels' value='5'><br>"
+             "<label>Exit TP Levels per Trade (0 = same as entry levels)</label>"
+             "<input type='number' name='exitLevels' value='0'><br>"
              "<label>Range Below (price units)</label>"
              "<input type='number' name='rangeBelow' step='any' value='0'><br>"
              "<label>Range Above (price units)</label>"
              "<input type='number' name='rangeAbove' step='any' value='0'><br>"
+             "<label>Auto Range (EO-adaptive entry band)</label>"
+             "<select name='autoRange'>"
+             "<option value='0' selected>Off &mdash; [0, price]</option>"
+             "<option value='1'>On &mdash; [price&times;(1-3&times;EO), price]</option>"
+             "</select><br>"
              "<h3>Exit Parameters</h3>"
              "<label>Exit Risk (0=sell early, 1=sell late)</label>"
              "<input type='number' name='exitRisk' step='any' value='0.5'><br>"
@@ -92,6 +99,11 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
              "<label>Chain Cycles</label><select name='chainCycles'><option value='0'>Off</option><option value='1'>On</option></select><br>"
              "<label>Savings Rate (0-1, fraction of profit saved)</label>"
              "<input type='number' name='savingsRate' step='any' value='0'><br>"
+             "<h3>Trade Frequency &amp; Capital Pump</h3>"
+             "<label>Max Trades per Month (0 = unlimited)</label>"
+             "<input type='number' name='maxTradesPerMonth' value='0'><br>"
+             "<label>Capital Pump per Month</label>"
+             "<input type='number' name='capitalPumpPerMonth' step='any' value='0'><br>"
              "<br><button>Run Simulation</button></form>";
 
         res.set_content(html::wrap("Simulator", h.str()), "text/html");
@@ -152,10 +164,17 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='number' name='entrySteepness' step='any' value='6.0'><br>"
              "<label>Entry Levels</label>"
              "<input type='number' name='entryLevels' value='5'><br>"
+             "<label>Exit TP Levels per Trade (0 = same as entry levels)</label>"
+             "<input type='number' name='exitLevels' value='0'><br>"
              "<label>Range Below (price units)</label>"
              "<input type='number' name='rangeBelow' step='any' value='0'><br>"
              "<label>Range Above (price units)</label>"
              "<input type='number' name='rangeAbove' step='any' value='0'><br>"
+             "<label>Auto Range (EO-adaptive entry band)</label>"
+             "<select name='autoRange'>"
+             "<option value='0' selected>Off &mdash; [0, price]</option>"
+             "<option value='1'>On &mdash; [price&times;(1-3&times;EO), price]</option>"
+             "</select><br>"
              "<h3>Exit Parameters</h3>"
              "<label>Exit Risk (0=sell early, 1=sell late)</label>"
              "<input type='number' name='exitRisk' step='any' value='0.5'><br>"
@@ -228,7 +247,9 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
         cfg.horizonParams.coefficientK            = fd(f, "coefficientK");
         cfg.horizonParams.maxRisk                 = fd(f, "maxRisk");
         cfg.horizonParams.minRisk                 = fd(f, "minRisk");
-        cfg.horizonParams.horizonCount            = fi(f, "entryLevels", 5);
+        cfg.entryLevels                           = fi(f, "entryLevels", 5);
+        cfg.exitLevels                            = fi(f, "exitLevels", 0);
+        cfg.horizonParams.horizonCount            = cfg.entryLevels;
         cfg.horizonParams.portfolioPump           = cfg.startingCapital;
         cfg.horizonParams.futureTradeCount        = fi(f, "futureTradeCount", 0);
         cfg.horizonParams.stopLossFraction        = fd(f, "stopLossFraction", 1.0);
@@ -236,6 +257,7 @@ inline void registerSimulatorRoutes(httplib::Server& svr, AppContext& ctx)
         cfg.downtrendCount                        = fi(f, "downtrendCount", 1);
         cfg.chainCycles                             = (fv(f, "chainCycles") == "1");
         cfg.savingsRate                             = fd(f, "savingsRate");
+        cfg.autoRange                               = (fv(f, "autoRange") == "1");
 
         // Parse price series into a local PriceSeries (SimConfig holds a pointer)
         PriceSeries localPrices;

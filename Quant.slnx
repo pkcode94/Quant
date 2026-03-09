@@ -1,6 +1,5 @@
 <Solution>
   <Configurations>
-    <Platform Name="Any CPU" />
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
@@ -8,5 +7,8 @@
     <File Path="libquant.zip" />
   </Folder>
   <Folder Name="/NewFolder2/" />
-  <Project Path="D:/Quant/Quant/Quant.vcxproj" Id="c790b741-7620-46a4-bde6-0203fa93185b" />
+  <Project Path="quant-mcp/quant-mcp.vcxproj" Id="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+    <Platform Project="x64" />
+  </Project>
+  <Project Path="Quant/Quant.vcxproj" Id="c790b741-7620-46a4-bde6-0203fa93185b" />
 </Solution>

@@ -7,11 +7,11 @@
 #include <limits>
 #include <string>
 
-// QuantMath — centralised financial math engine.
+// QuantMath ï¿½ centralised financial math engine.
 //
 // High-level API:
-//   SerialPlan  generateSerialPlan(SerialParams)  — full serial entry/exit plan
-//   CycleResult computeCycle(CycleParams)         — single cycle profit summary
+//   SerialPlan  generateSerialPlan(SerialParams)  ï¿½ full serial entry/exit plan
+//   CycleResult computeCycle(CycleParams)         ï¿½ single cycle profit summary
 //
 // All routes, simulators, plugins, and exporters call these methods
 // rather than computing inline.  The primitives (sigmoid, lerp, etc.)
@@ -259,7 +259,55 @@ public:
         return 1.0 + static_cast<double>(count) * perCycle;
     }
 
-    // ?? Stop-loss capital clamp ?????????????????????????????
+    // Price-level buffer (explicit mode, ï¿½7.2).
+    // Computes the TP multiplier that guarantees fee-neutral re-entry
+    // at price pBuffer with quantity qNext, for nDowntrend re-entries.
+    //
+    //   buffer = 1 + n_d * P_buffer * q_next * (1 + F) / (tpBase * q)
+    //
+    // tpBase = entryPrice * (1 + EO), the un-buffered TP.
+    // feeComponent = f_s * f_h * dt.
+    static double bufferFromPriceLevel(double pBuffer, double qNext,
+                                       double tpBase, double q,
+                                       double feeComponent, int nDowntrend)
+    {
+        if (nDowntrend <= 0 || tpBase <= 0.0 || q <= 0.0)
+            return 1.0;
+        return 1.0 + static_cast<double>(nDowntrend) * pBuffer * qNext
+                     * (1.0 + feeComponent) / (tpBase * q);
+    }
+
+    // Implied price level (ï¿½7.3).
+    // Given any buffer multiplier, returns the maximum re-entry price
+    // the extra profit can fund (assuming qNext units, nDowntrend cycles).
+    //
+    //   P_buffer = (buffer - 1) * tpBase * q / (n_d * q_next * (1 + F))
+    static double impliedBufferPrice(double buffer, double tpBase, double q,
+                                     double qNext, double feeComponent,
+                                     int nDowntrend)
+    {
+        if (nDowntrend <= 0 || qNext <= 0.0 || (1.0 + feeComponent) <= 0.0)
+            return 0.0;
+        return (buffer - 1.0) * tpBase * q
+               / (static_cast<double>(nDowntrend) * qNext * (1.0 + feeComponent));
+    }
+
+    // Maximum re-entry quantity the buffer can fund at a given price (ï¿½7.2.1).
+    // This is always a FRACTION of q ï¿½ the buffer can never fund a
+    // full-size re-entry at a comparable price.
+    //
+    //   q_next_max = (buffer - 1) * tpBase * q / (n_d * P_buffer * (1 + F))
+    static double maxBufferedQuantity(double buffer, double tpBase, double q,
+                                      double pBuffer, double feeComponent,
+                                      int nDowntrend)
+    {
+        if (nDowntrend <= 0 || pBuffer <= 0.0 || (1.0 + feeComponent) <= 0.0)
+            return 0.0;
+        return (buffer - 1.0) * tpBase * q
+               / (static_cast<double>(nDowntrend) * pBuffer * (1.0 + feeComponent));
+    }
+
+    // ?? Stop-loss capital clamp
 
     // Clamp stop-loss fraction so total worst-case SL loss ? capital.
     //   ? eo * funding_i * slFrac ? availableCapital
@@ -350,7 +398,7 @@ public:
 
     // ?? Chain helpers ???????????????????????????????????????
 
-    // Future trade count for cycle c in a C-cycle chain (§9.4).
+    // Future trade count for cycle c in a C-cycle chain (ï¿½9.4).
     //   n_f = C - 1 - c
     static int chainFutureTradeCount(int totalCycles, int currentCycle)
     {
@@ -370,6 +418,7 @@ public:
         double currentPrice         = 0.0;
         double quantity             = 1.0;
         int    levels               = 4;
+        int    exitLevels           = 0;     // fractional TPs per entry (0 = same as levels)
         double steepness            = 6.0;
         double risk                 = 0.5;
         bool   isShort              = false;
@@ -378,6 +427,9 @@ public:
         // Range
         double rangeAbove           = 0.0;
         double rangeBelow           = 0.0;
+        double rangeAbovePerDt      = 0.0;   // range drift: rangeAbove grows by this per deltaTime
+        double rangeBelowPerDt      = 0.0;   // range drift: rangeBelow grows by this per deltaTime
+        bool   autoRange            = false;
 
         // Fee structure
         double feeSpread            = 0.0;
@@ -392,6 +444,11 @@ public:
         double maxRisk              = 0.0;
         double minRisk              = 0.0;
 
+        // Exit distribution
+        double exitRisk             = 0.0;   // sigmoid center for exit sell distribution
+        double exitFraction         = 1.0;   // fraction of qty to sell (0-1)
+        double exitSteepness        = 4.0;   // sigmoid steepness for exit distribution
+
         // Stop-loss
         bool   generateStopLosses   = false;
         double stopLossFraction     = 1.0;
@@ -402,6 +459,48 @@ public:
 
         // Savings
         double savingsRate          = 0.0;
+
+        // Trade frequency limit: max entries per calendar month (0 = unlimited).
+        // In chain mode this caps how many levels can fill per cycle.
+        int    maxTradesPerMonth    = 0;
+        // Capital pump: flat capital injection per month (0 = disabled).
+        // In chain mode this is added to availableFunds at each cycle.
+        double capitalPumpPerMonth  = 0.0;
+    };
+
+    // ?? Exit plan (ï¿½6) ï¿½ structs needed by SerialEntry ??????
+
+    struct ExitPlanLevel
+    {
+        int    index          = 0;
+        double tpPrice        = 0.0;
+        double sellQty        = 0.0;
+        double sellFraction   = 0.0;
+        double sellValue      = 0.0;
+        double grossProfit    = 0.0;
+        double cumSold        = 0.0;
+        double levelBuyFee    = 0.0;
+        double netProfit      = 0.0;
+        double cumNetProfit   = 0.0;
+    };
+
+    struct ExitPlan
+    {
+        std::vector<ExitPlanLevel> levels;
+    };
+
+    struct ExitParams
+    {
+        double entryPrice       = 0.0;
+        double quantity         = 0.0;
+        double buyFee           = 0.0;
+        double rawOH            = 0.0;
+        double eo               = 0.0;
+        double maxRisk          = 0.0;
+        int    horizonCount     = 1;
+        double riskCoefficient  = 0.0;
+        double exitFraction     = 1.0;
+        double steepness        = 4.0;
     };
 
     // ?? Per-level output ????????????????????????????????????
@@ -415,14 +514,17 @@ public:
         double funding      = 0.0;
         double fundFrac     = 0.0;
         double fundQty      = 0.0;
-        double tpUnit       = 0.0;   // take-profit per unit
-        double tpTotal      = 0.0;   // tp * qty
-        double tpGross      = 0.0;   // tpTotal - cost
-        double slUnit       = 0.0;   // stop-loss per unit
-        double slTotal      = 0.0;   // sl * slQty
-        double slLoss       = 0.0;   // slTotal - entry*slQty
-        double slQty        = 0.0;   // qty sold at SL
-        double effectiveOH  = 0.0;   // effective overhead at this entry
+        double tpUnit       = 0.0;   // summary: weighted-avg TP price
+        double tpTotal      = 0.0;   // summary: total TP revenue
+        double tpGross      = 0.0;   // summary: tpTotal - cost
+        double slUnit       = 0.0;
+        double slTotal      = 0.0;
+        double slLoss       = 0.0;
+        double slQty        = 0.0;
+        double effectiveOH  = 0.0;
+
+        // Fractional exit levels for this trade
+        std::vector<ExitPlanLevel> exits;
     };
 
     // ?? Full plan output ????????????????????????????????????
@@ -437,6 +539,13 @@ public:
         double combinedBuffer   = 1.0;   // dtBuffer * slBuffer
         double slFraction       = 1.0;   // (possibly clamped) SL sell fraction
         double totalSlLoss      = 0.0;   // sum of worst-case SL losses
+
+        // Price-level guarantee (ï¿½7.3): the implied re-entry price
+        // assuming q_next = q (full re-entry).  In practice the buffer
+        // funds only a FRACTION of the next trade at any realistic
+        // price (ï¿½7.2.1).  Use maxBufferedQuantity() to compute the
+        // actual fractional quantity at a given price.
+        double pBuffer          = 0.0;
 
         // Per-level entries
         std::vector<SerialEntry> entries;
@@ -477,7 +586,7 @@ public:
     //
     // The core computation that the serial generator, hledger
     // exporter, simulator, and docker-finance plugin all use.
-    // Pure math — no UI, no database, no HTTP.
+    // Pure math ï¿½ no UI, no database, no HTTP.
 
     static SerialPlan generateSerialPlan(const SerialParams& sp)
     {
@@ -507,12 +616,32 @@ public:
                                       upper * plan.slFraction, sp.stopLossHedgeCount);
         plan.combinedBuffer = plan.dtBuffer * plan.slBuffer;
 
-        // Price range
+        // Derive the implied price-level guarantee (ï¿½7.3).
+        // At realistic prices, the buffer funds only a fraction of
+        // the next trade (ï¿½7.2.1), not the whole thing.
+        double tpBase = sp.currentPrice * (1.0 + plan.effectiveOH);
+        double feeComp = sp.feeSpread * sp.feeHedgingCoefficient * sp.deltaTime;
+        plan.pBuffer = impliedBufferPrice(plan.dtBuffer, tpBase,
+                                          sp.quantity, sp.quantity,
+                                          feeComp, sp.downtrendCount);
+
+        // Price range.
+        // Default: [0, currentPrice] ï¿½ the full discount spectrum.
+        // autoRange: [price ï¿½ (1 - 3ï¿½EO), price] ï¿½ clusters entries
+        // within 3 overhead-widths of spot (heuristic, not equation-derived).
         double priceLow, priceHigh;
         if (sp.rangeAbove > 0.0 || sp.rangeBelow > 0.0)
         {
             priceLow  = floorEps(sp.currentPrice - sp.rangeBelow);
             priceHigh = sp.currentPrice + sp.rangeAbove;
+        }
+        else if (sp.autoRange && plan.effectiveOH > 0.0)
+        {
+            double band = plan.effectiveOH * 3.0;
+            if (band < 0.01) band = 0.01;
+            if (band > 0.99) band = 0.99;
+            priceLow  = floorEps(sp.currentPrice * (1.0 - band));
+            priceHigh = sp.currentPrice;
         }
         else
         {
@@ -549,14 +678,38 @@ public:
             e.fundQty    = fundedQty(e.entryPrice, e.funding);
             e.effectiveOH = plan.effectiveOH;
 
-            // TP
-            e.tpUnit = levelTP(e.entryPrice, plan.overhead, plan.effectiveOH,
-                               sp, steep, i, N, priceHigh);
+            // Fractional exit levels for this trade
+            int M = (sp.exitLevels > 0) ? sp.exitLevels : N;
+            ExitParams ep;
+            ep.entryPrice      = e.entryPrice;
+            ep.quantity         = e.fundQty;
+            ep.buyFee           = e.funding * sp.feeSpread;
+            ep.rawOH            = plan.overhead;
+            ep.eo               = plan.effectiveOH;
+            ep.maxRisk          = sp.maxRisk;
+            ep.horizonCount     = M;
+            ep.riskCoefficient  = sp.exitRisk;
+            ep.exitFraction     = sp.exitFraction;
+            ep.steepness        = sp.exitSteepness;
+
+            auto exitPlan = generateExitPlan(ep);
             if (plan.combinedBuffer > 1.0)
-                e.tpUnit *= plan.combinedBuffer;
-            double cost  = e.entryPrice * e.fundQty;
-            e.tpTotal    = e.tpUnit * e.fundQty;
-            e.tpGross    = e.tpTotal - cost;
+                for (auto& el : exitPlan.levels)
+                {
+                    el.tpPrice     *= plan.combinedBuffer;
+                    el.sellValue    = el.tpPrice * el.sellQty;
+                    el.grossProfit  = grossProfit(e.entryPrice, el.tpPrice, el.sellQty);
+                    el.netProfit    = el.grossProfit - el.levelBuyFee;
+                }
+            e.exits = std::move(exitPlan.levels);
+
+            // Summary fields from exits
+            double cost = e.entryPrice * e.fundQty;
+            e.tpTotal = 0.0;
+            for (const auto& ex : e.exits)
+                e.tpTotal += ex.sellValue;
+            e.tpGross = e.tpTotal - cost;
+            e.tpUnit  = (e.fundQty > 0) ? e.tpTotal / e.fundQty : 0.0;
 
             // SL
             if (sp.generateStopLosses)
@@ -591,9 +744,17 @@ public:
             if (e.funding <= 0) continue;
 
             double buyFee  = e.funding * sp.feeSpread;
-            double revenue = e.tpUnit * e.fundQty;
-            double sellFee = revenue * sp.feeSpread;
-            double net     = revenue - e.funding - buyFee - sellFee;
+            double revenue = 0.0;
+            double sellFee = 0.0;
+
+            // Sum across fractional exit levels
+            for (const auto& ex : e.exits)
+            {
+                revenue += ex.sellValue;
+                sellFee += ex.sellValue * sp.feeSpread;
+            }
+
+            double net = revenue - e.funding - buyFee - sellFee;
 
             cr.totalCost    += e.funding;
             cr.totalRevenue += revenue;
@@ -637,11 +798,11 @@ public:
         double initialEffective = 0.0;
     };
 
-    // ?? generateChain (§9) ??????????????????????????????????
+    // ?? generateChain (ï¿½9) ??????????????????????????????????
     //
     // Multi-cycle chain: iterate cycles, generate serial plan per
     // cycle, compute profit, forward capital into next cycle.
-    // Pure math — no DB, no HTTP.
+    // Pure math ï¿½ no DB, no HTTP.
 
     static ChainResult generateChain(const SerialParams& sp, int totalCycles)
     {
@@ -660,9 +821,23 @@ public:
             csp.availableFunds   = capital;
             csp.futureTradeCount = chainFutureTradeCount(totalCycles, ci);
 
+            // Capital pump: inject once per cycle (proxy for monthly).
+            // Cycle 0 uses the original capital; subsequent cycles get
+            // the pump on top of compounded reinvest.
+            if (ci > 0 && sp.capitalPumpPerMonth > 0.0)
+                csp.availableFunds += sp.capitalPumpPerMonth;
+
+            // Range drift: widen the entry band over time.
+            // Each cycle adds rangeAbovePerDt * deltaTime to rangeAbove (and below).
+            if (ci > 0)
+            {
+                csp.rangeAbove += sp.rangeAbovePerDt * sp.deltaTime * ci;
+                csp.rangeBelow += sp.rangeBelowPerDt * sp.deltaTime * ci;
+            }
+
             ChainCycle cc;
             cc.cycle   = ci;
-            cc.capital = capital;
+            cc.capital = csp.availableFunds;
             cc.plan    = generateSerialPlan(csp);
             cc.result  = computeCycle(cc.plan, csp);
 
@@ -718,7 +893,7 @@ private:
 
 public:
 
-    // ?? Per-level TP/SL (§5.3, §5.4) ???????????????????????
+    // ?? Per-level TP/SL (ï¿½5.3, ï¿½5.4) ???????????????????????
 
     // Per-level take-profit with risk-warped sigmoid distribution.
     // Used by serial generator, entry routes, and horizon engine.
@@ -741,7 +916,7 @@ public:
         return (sl < 0.0) ? 0.0 : sl;
     }
 
-    // ?? Horizon factor (§5.1, §5.2) ????????????????????????
+    // ?? Horizon factor (ï¿½5.1, ï¿½5.2) ????????????????????????
     //
     // Computes the TP/SL factor for level i of N.
     //   Standard mode (maxRisk=0): factor = eo * (i+1)
@@ -765,44 +940,6 @@ public:
         return eo * static_cast<double>(levelIndex + 1);
     }
 
-    // ?? Exit plan (§6) ??????????????????????????????????????
-    //
-    // Distributes a sigmoidal fraction of holdings across TP levels
-    // as pending sell orders.  Pure math — no Trade dependency.
-
-    struct ExitPlanLevel
-    {
-        int    index          = 0;
-        double tpPrice        = 0.0;
-        double sellQty        = 0.0;
-        double sellFraction   = 0.0;
-        double sellValue      = 0.0;
-        double grossProfit    = 0.0;
-        double cumSold        = 0.0;
-        double levelBuyFee    = 0.0;
-        double netProfit      = 0.0;
-        double cumNetProfit   = 0.0;
-    };
-
-    struct ExitPlan
-    {
-        std::vector<ExitPlanLevel> levels;
-    };
-
-    struct ExitParams
-    {
-        double entryPrice       = 0.0;
-        double quantity         = 0.0;
-        double buyFee           = 0.0;
-        double rawOH            = 0.0;   // from computeOverhead
-        double eo               = 0.0;   // from effectiveOverhead
-        double maxRisk          = 0.0;
-        int    horizonCount     = 1;
-        double riskCoefficient  = 0.0;
-        double exitFraction     = 1.0;
-        double steepness        = 4.0;
-    };
-
     // Generate the exit plan: sell distribution + TP prices + profit.
     static ExitPlan generateExitPlan(const ExitParams& ep)
     {
@@ -814,7 +951,7 @@ public:
 
         double sellableQty = ep.quantity * frac;
 
-        // Cumulative sigmoid sell distribution (§6.2)
+        // Cumulative sigmoid sell distribution (ï¿½6.2)
         double center = risk * static_cast<double>(N - 1);
         std::vector<double> cumSigma(N + 1);
         for (int i = 0; i <= N; ++i)
@@ -856,7 +993,7 @@ public:
         return plan;
     }
 
-    // ?? Profit (§8) ?????????????????????????????????????????
+    // ?? Profit (ï¿½8) ?????????????????????????????????????????
     //
     // Unified profit calculation for any position.
 

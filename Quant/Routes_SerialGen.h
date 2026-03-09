@@ -27,6 +27,7 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
              "<label>Current Price</label><input type='number' name='currentPrice' step='any' required><br>"
              "<label>Quantity</label><input type='number' name='quantity' step='any' required><br>"
              "<label>Entry Levels</label><input type='number' name='levels' value='4'><br>"
+             "<label>Exit TP Levels per Trade (0 = same as entry levels)</label><input type='number' name='exitLevels' value='0'><br>"
              "<label>Risk</label><input type='number' name='risk' step='any' value='0.5'><br>"
              "<label>Steepness</label><input type='number' name='steepness' step='any' value='6'><br>"
              "<label>Fee Hedging</label><input type='number' name='feeHedgingCoefficient' step='any' value='1'><br>"
@@ -42,11 +43,17 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
              "<label>Funding</label><select name='fundMode'><option value='1'>Pump only</option><option value='2'>Pump + Wallet</option></select><br>"
              "<label>Stop Losses</label><select name='generateStopLosses'><option value='0'>No</option><option value='1'>Yes</option></select><br>"
              "<label>SL Fraction</label><input type='number' name='stopLossFraction' step='any' value='1' title='Fraction of position to sell at SL (0-1, 1 = full exit)'><br>"
-             "<label>Range Above</label><input type='number' name='rangeAbove' step='any' value='0'><br>"
-             "<label>Range Below</label><input type='number' name='rangeBelow' step='any' value='0'><br>"
+             "<label>Adaptive Range</label><select name='adaptiveRange'><option value='1' selected>On (max hist price)</option><option value='0'>Off (manual)</option></select>"
+             "<div style='color:#64748b;font-size:0.75em;margin-left:120px;margin-bottom:6px;'>When ON: range below=current, range above=max historical price</div><br>"
+             "<label>Range Above (ignored if adaptive)</label><input type='number' name='rangeAbove' step='any' value='0'><br>"
+             "<label>Range Below (ignored if adaptive)</label><input type='number' name='rangeBelow' step='any' value='0'><br>"
              "<label>DT Count</label><input type='number' name='downtrendCount' value='1' title='Number of future downturn cycles to pre-fund (0 = disabled)'><br>"
              "<label>SL Hedge Count</label><input type='number' name='stopLossHedgeCount' value='0' title='Future SL hits to pre-fund via TP inflation (0 = disabled)'><br>"
              "<label>Future Trade Fees</label><input type='number' name='futureTradeCount' value='0' title='Future chain trades whose fees this TP must cover (0 = self only)'><br>"
+             "<h3>Exit Distribution</h3>"
+             "<label>Exit Risk (0=sell early, 1=sell late)</label><input type='number' name='exitRisk' step='any' value='0'><br>"
+             "<label>Exit Fraction (0-1)</label><input type='number' name='exitFraction' step='any' value='1'><br>"
+             "<label>Exit Steepness</label><input type='number' name='exitSteepness' step='any' value='4'><br>"
              "<button>Generate Series</button></form>";
         res.set_content(html::wrap("Serial Generator", h.str()), "text/html");
     });
@@ -63,6 +70,7 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         bool isShort = (fv(f, "isShort") == "1");
         int fundMode = fi(f, "fundMode", 1);
         bool genSL = (fv(f, "generateStopLosses") == "1");
+        // Adaptive range disabled - using manual ranges
         double rangeAbove = fd(f, "rangeAbove");
         double rangeBelow = fd(f, "rangeBelow");
         int downtrendCount = fi(f, "downtrendCount", 1);
@@ -95,6 +103,7 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         sp.currentPrice          = cur;
         sp.quantity              = qty;
         sp.levels                = p.horizonCount;
+        sp.exitLevels            = fi(f, "exitLevels", 0);
         sp.steepness             = steepness;
         sp.risk                  = risk;
         sp.isShort               = isShort;
@@ -110,6 +119,9 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
         sp.futureTradeCount      = p.futureTradeCount;
         sp.maxRisk               = p.maxRisk;
         sp.minRisk               = p.minRisk;
+        sp.exitRisk              = fd(f, "exitRisk", 0.0);
+        sp.exitFraction          = fd(f, "exitFraction", 1.0);
+        sp.exitSteepness         = fd(f, "exitSteepness", 4.0);
         sp.generateStopLosses    = genSL;
         sp.stopLossFraction      = p.stopLossFraction;
         sp.stopLossHedgeCount    = p.stopLossHedgeCount;
@@ -153,6 +165,20 @@ inline void registerSerialGenRoutes(httplib::Server& svr, AppContext& ctx)
             if (genSL)
                 h << "<td class='sell'>" << e.slUnit << "</td><td class='sell'>" << e.slQty << "</td><td class='sell'>" << e.slTotal << "</td><td class='sell'>" << e.slLoss << "</td>";
             h << "</tr>";
+            // Render fractional exit sub-levels
+            for (const auto& ex : e.exits)
+            {
+                h << "<tr style='font-size:0.82em;color:#94a3b8;'>"
+                  << "<td></td><td style='padding-left:24px;'>&#x2514; Exit " << ex.index << "</td>"
+                  << "<td>" << (ex.sellFraction * 100) << "%</td>"
+                  << "<td>" << ex.sellQty << "</td>"
+                  << "<td></td><td></td>"
+                  << "<td class='buy'>" << ex.tpPrice << "</td>"
+                  << "<td class='buy'>" << ex.sellValue << "</td>"
+                  << "<td class='buy'>" << ex.grossProfit << "</td>";
+                if (genSL) h << "<td></td><td></td><td></td><td></td>";
+                h << "</tr>";
+            }
         }
         h << "</table>";
         h << "<h2>Save Series</h2><form class='card' method='POST' action='/save-serial'>"

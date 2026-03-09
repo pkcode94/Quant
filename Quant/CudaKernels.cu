@@ -63,6 +63,15 @@ struct GpuSimParams
     double exitRisk, exitFraction, exitSteepness;
     double entryRisk, entrySteepness;
     int    chainCycles;
+    int    exitLevels;  // TP levels per trade (0 = same as entry levels)
+
+    // Trade frequency limit: max entries allowed per calendar month.
+    // 0 = unlimited.  Enforced via timestamps passed to the kernel.
+    int    maxTradesPerMonth;
+    // Capital pump: flat capital injection at each month boundary.
+    // 0 = disabled.  Added to available capital when the month rolls.
+    double capitalPumpPerMonth;
+    int    autoRange;   // 0 = classic [0, price]; 1 = EO-adaptive band
 };
 
 static constexpr int OBJ_MAX_PROFIT = 1;
@@ -130,6 +139,40 @@ __device__ __forceinline__ double gpu_sigmoidBuffer(
     return 1.0 + count * (lower + gpu_sigmoidNorm(t, alpha) * (upper - lower));
 }
 
+// Price-level buffer (§7.2): TP multiplier guaranteeing fee-neutral
+// re-entry at pBuffer with quantity qNext for nDt re-entries.
+//   buffer = 1 + n_d * P_buffer * q_next * (1 + F) / (tpBase * q)
+__device__ __forceinline__ double gpu_priceLevelBuffer(
+    double pBuffer, double qNext, double tpBase, double q,
+    double feeComponent, int nDt)
+{
+    if (nDt <= 0 || tpBase <= 0.0 || q <= 0.0) return 1.0;
+    return 1.0 + (double)nDt * pBuffer * qNext * (1.0 + feeComponent)
+                 / (tpBase * q);
+}
+
+// Implied price level (§7.3): recover P_buffer from any buffer multiplier.
+__device__ __forceinline__ double gpu_impliedBufferPrice(
+    double buffer, double tpBase, double q, double qNext,
+    double feeComponent, int nDt)
+{
+    if (nDt <= 0 || qNext <= 0.0 || (1.0 + feeComponent) <= 0.0) return 0.0;
+    return (buffer - 1.0) * tpBase * q
+           / ((double)nDt * qNext * (1.0 + feeComponent));
+}
+
+// Maximum re-entry quantity the buffer can fund (§7.2.1).
+// Always a FRACTION of q — the buffer can never fund a full-size
+// re-entry at a comparable price.
+__device__ __forceinline__ double gpu_maxBufferedQuantity(
+    double buffer, double tpBase, double q, double pBuffer,
+    double feeComponent, int nDt)
+{
+    if (nDt <= 0 || pBuffer <= 0.0 || (1.0 + feeComponent) <= 0.0) return 0.0;
+    return (buffer - 1.0) * tpBase * q
+           / ((double)nDt * pBuffer * (1.0 + feeComponent));
+}
+
 // ============================================================
 // Device entry-level generator
 // ============================================================
@@ -150,6 +193,19 @@ __device__ int gpu_generateEntries(
     double pLow, pHigh;
     if (cfg.rangeAbove > 0 || cfg.rangeBelow > 0)
     { pLow = fmax(currentPrice - cfg.rangeBelow, 1e-10); pHigh = currentPrice + cfg.rangeAbove; }
+    else if (cfg.autoRange)
+    {
+        double oh_r = gpu_overhead(currentPrice, 1.0, cfg.feeSpread, cfg.feeHedging,
+                                   cfg.deltaTime, cfg.symbolCount, capital,
+                                   cfg.coefficientK, cfg.futureTradeCount);
+        double eo_r = gpu_effectiveOH(oh_r, cfg.surplus, cfg.feeSpread,
+                                      cfg.feeHedging, cfg.deltaTime);
+        double band = eo_r * 3.0;
+        if (band < 0.01) band = 0.01;
+        if (band > 0.99) band = 0.99;
+        pLow = fmax(currentPrice * (1.0 - band), 1e-10);
+        pHigh = currentPrice;
+    }
     else
     { pLow = 0.0; pHigh = currentPrice; }
 
@@ -186,7 +242,7 @@ __device__ int gpu_generateExits(
     const GpuSimParams& cfg, double entryPrice, double qty,
     double buyFee, double entryCost, GpuExitLevel* out)
 {
-    int N = cfg.levels;
+    int N = (cfg.exitLevels > 0) ? cfg.exitLevels : cfg.levels;
     if (N < 1) N = 1;
     if (N > GPU_MAX_EXITS) N = GPU_MAX_EXITS;
 
@@ -243,6 +299,7 @@ __device__ int gpu_generateExits(
 __global__ void batchSimKernel(
     const GpuSimParams* __restrict__ configs,
     const double*       __restrict__ prices,
+    const double*       __restrict__ timestamps,
     int                              numPrices,
     int                              objective,
     double*             __restrict__ results,
@@ -277,6 +334,15 @@ __global__ void batchSimKernel(
         for (int i = 0; i < GPU_MAX_CYCLES; ++i) { cycCap[i] = 0; cycProf[i] = 0; }
         cycCap[0] = capital;
 
+        // Monthly trade frequency + capital pump state.
+        // Month index derived from Unix timestamp: month = (int)(ts / 2629746)
+        // where 2629746 = average seconds per month (365.25 * 86400 / 12).
+        static constexpr double SECS_PER_MONTH = 2629746.0;
+        int  curMonth      = -1;   // current month index
+        int  tradesThisMonth = 0;
+        int  maxTPM        = cfg.maxTradesPerMonth;   // 0 = unlimited
+        double pumpPM      = cfg.capitalPumpPerMonth;  // 0 = disabled
+
         // __ldg: read-only data cache path for price series
         double entryRefPrice = __ldg(&prices[0]);
         numEntries = gpu_generateEntries(cfg, entryRefPrice, capital, entries);
@@ -286,16 +352,30 @@ __global__ void batchSimKernel(
         for (int pi = 0; pi < numPrices; ++pi)
         {
             double price = __ldg(&prices[pi]);
+            double ts    = __ldg(&timestamps[pi]);
+
+            // --- month boundary detection ---
+            int month = (ts > 0.0) ? (int)(ts / SECS_PER_MONTH) : -1;
+            if (month != curMonth && month >= 0)
+            {
+                // Capital pump: inject at the start of each new month
+                if (curMonth >= 0 && pumpPM > 0.0)
+                    capital += pumpPM;
+                curMonth = month;
+                tradesThisMonth = 0;
+            }
 
             // --- entries: limit buys fill on drop, breakout buys fill on rise ---
             for (int ei = 0; ei < numEntries; ++ei)
             {
                 if (entryFilled[ei]) continue;
+                // Trade frequency limit: skip if month quota exhausted
+                if (maxTPM > 0 && tradesThisMonth >= maxTPM) break;
                 bool belowRef = (entries[ei].entryPrice <= entryRefPrice);
                 if (belowRef) {
-                    if (price >= entries[ei].entryPrice) continue;  // limit: wait for drop
+                    if (price >= entries[ei].entryPrice) continue;
                 } else {
-                    if (price <= entries[ei].entryPrice) continue;  // breakout: wait for rise
+                    if (price <= entries[ei].entryPrice) continue;
                 }
                 if (entries[ei].qty < 1e-15 || numPos >= GPU_MAX_POSITIONS) continue;
                 double cost = entries[ei].entryPrice * entries[ei].qty;
@@ -310,6 +390,7 @@ __global__ void batchSimKernel(
                 for (int x = 0; x < p.numExits; ++x) p.exitFilled[x] = false;
                 ++numPos;
                 entryFilled[ei] = true;
+                ++tradesThisMonth;
             }
 
             // --- exits ---
@@ -397,30 +478,29 @@ __global__ void batchSimKernel(
 
 struct GpuBuffers
 {
-    GpuSimParams* d_configs  = nullptr;
-    double*       d_prices   = nullptr;
-    double*       d_results  = nullptr;
-    int           capConfigs = 0;
-    int           capPrices  = 0;
-    int           capResults = 0;
+    GpuSimParams* d_configs    = nullptr;
+    double*       d_prices     = nullptr;
+    double*       d_timestamps = nullptr;
+    double*       d_results    = nullptr;
+    int           capConfigs   = 0;
+    int           capPrices    = 0;
+    int           capResults   = 0;
 
-    // Returns total device bytes currently held by these buffers
     size_t bytesUsed() const
     {
         return (size_t)capConfigs * sizeof(GpuSimParams)
-             + (size_t)capPrices  * sizeof(double)
+             + (size_t)capPrices  * sizeof(double) * 2   // prices + timestamps
              + (size_t)capResults * sizeof(double);
     }
 
     bool ensure(int nConfigs, int nPrices, size_t vramBudget)
     {
-        // Compute bytes we WOULD need after this grow
         int wantConfigs = (nConfigs > capConfigs) ? nConfigs + 64  : capConfigs;
         int wantPrices  = (nPrices  > capPrices)  ? nPrices + 1024 : capPrices;
         int wantResults = (nConfigs > capResults)  ? nConfigs + 64  : capResults;
 
         size_t need = (size_t)wantConfigs * sizeof(GpuSimParams)
-                    + (size_t)wantPrices  * sizeof(double)
+                    + (size_t)wantPrices  * sizeof(double) * 2
                     + (size_t)wantResults * sizeof(double);
 
         if (vramBudget > 0 && need > vramBudget)
@@ -439,7 +519,9 @@ struct GpuBuffers
         if (nPrices > capPrices)
         {
             if (d_prices) cudaFree(d_prices);
-            CUDA_CHK(cudaMalloc(&d_prices, wantPrices * sizeof(double)));
+            if (d_timestamps) cudaFree(d_timestamps);
+            CUDA_CHK(cudaMalloc(&d_prices,     wantPrices * sizeof(double)));
+            CUDA_CHK(cudaMalloc(&d_timestamps, wantPrices * sizeof(double)));
             capPrices = wantPrices;
         }
         if (nConfigs > capResults)
@@ -453,9 +535,10 @@ struct GpuBuffers
 
     void release()
     {
-        if (d_configs) { cudaFree(d_configs); d_configs = nullptr; capConfigs = 0; }
-        if (d_prices)  { cudaFree(d_prices);  d_prices  = nullptr; capPrices  = 0; }
-        if (d_results) { cudaFree(d_results); d_results = nullptr; capResults = 0; }
+        if (d_configs)    { cudaFree(d_configs);    d_configs    = nullptr; capConfigs = 0; }
+        if (d_prices)     { cudaFree(d_prices);     d_prices     = nullptr; }
+        if (d_timestamps) { cudaFree(d_timestamps); d_timestamps = nullptr; capPrices  = 0; }
+        if (d_results)    { cudaFree(d_results);    d_results    = nullptr; capResults = 0; }
     }
 };
 
@@ -520,10 +603,12 @@ void cudaGpuCleanup()
 
 // Batch-simulate N parameter configs in parallel.
 // Persistent buffers: no cudaMalloc/Free in the hot path.
-// Timestamps parameter kept for API compat but unused by kernel.
+// Timestamps are Unix epoch doubles, used for monthly trade limits
+// and capital pump injection.  Pass nullptr if unavailable — the
+// kernel treats ts <= 0 as "no calendar data" and skips limits.
 bool cudaGpuBatchSim(
     const GpuSimParams* hostConfigs, int numConfigs,
-    const double* /*hostTimestamps*/, const double* hostPrices, int numPrices,
+    const double* hostTimestamps, const double* hostPrices, int numPrices,
     int objective, double* hostResults)
 {
     if (!g_cudaReady || numConfigs <= 0 || numPrices <= 0) return false;
@@ -536,9 +621,12 @@ bool cudaGpuBatchSim(
                         numConfigs * sizeof(GpuSimParams), cudaMemcpyHostToDevice));
     CUDA_CHK(cudaMemcpy(g_buf.d_prices, hostPrices,
                         numPrices * sizeof(double), cudaMemcpyHostToDevice));
+    if (hostTimestamps)
+        CUDA_CHK(cudaMemcpy(g_buf.d_timestamps, hostTimestamps,
+                            numPrices * sizeof(double), cudaMemcpyHostToDevice));
+    else
+        CUDA_CHK(cudaMemset(g_buf.d_timestamps, 0, numPrices * sizeof(double)));
 
-    // Launch geometry: 64 threads/block (each thread is register-heavy).
-    // Throttle caps the number of blocks to limit SM occupancy.
     int tpb         = 64;
     if (numConfigs < tpb) tpb = numConfigs;
     int maxBlocks   = (numConfigs + tpb - 1) / tpb;
@@ -547,7 +635,7 @@ bool cudaGpuBatchSim(
     int blocks      = (maxBlocks < smBudget) ? maxBlocks : smBudget;
 
     batchSimKernel<<<blocks, tpb>>>(
-        g_buf.d_configs, g_buf.d_prices, numPrices,
+        g_buf.d_configs, g_buf.d_prices, g_buf.d_timestamps, numPrices,
         objective, g_buf.d_results, numConfigs);
 
     CUDA_CHK(cudaDeviceSynchronize());

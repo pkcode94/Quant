@@ -1,0 +1,17 @@
+env/
+
+# build intermediates
+.vscode/
+build/
+__pycache__/
+*.egg-info/
+*.cpython-312-x86_64-linux-gnu.so
+
+# profiling tools
+*.sqlite
+*.nsys-rep
+*.ncu-rep
+perf.data*
+*.gputrace/
+
+**/.DS_Store

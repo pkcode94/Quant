@@ -8,7 +8,7 @@
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 65536
 #endif
 
-#include "cpp-httplib-master\httplib.h"
+#include "cpp-httplib-master/httplib.h"
 
 #include <string>
 #include <sstream>
@@ -225,6 +225,7 @@ inline std::string nav()
         "<a href='/pnl' style='color:#22c55e;'>&#9654; P&amp;L</a>"
         "<a href='/simulator' style='color:#38bdf8;'>&#9881; Simulator</a>"
         "<a href='/optimizer' style='color:#a78bfa;'>&#8711; BPTT</a>"
+        "<a href='/chains' style='color:#f472b6;'>&#9939; Chains</a>"
         "<a href='/chart' style='color:#c9a44a;font-weight:bold;'>&#9733; Chart</a>"
         "<a href='/premium' style='color:#c9a44a;'>&#9733; Premium</a>"
         "<a href='/admin' style='color:#7b97c4;'>Admin</a>"

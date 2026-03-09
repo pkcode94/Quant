@@ -54,7 +54,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.1.props" />
+    <!-- <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.1.props" /> -->
   </ImportGroup>
   <ImportGroup Label="Shared">
   </ImportGroup>
@@ -105,7 +105,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>QUANT_CUDA;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -113,6 +113,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,12 +137,15 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppContext.h" />
+    <ClInclude Include="DiscussionLedger.h" />
     <ClInclude Include="ExitStrategyCalculator.h" />
+    <ClInclude Include="GpuLLM.h" />
     <ClInclude Include="HtmlHelpers.h" />
     <ClInclude Include="HttpApi.h" />
     <ClInclude Include="IdGenerator.h" />
     <ClInclude Include="json.h" />
     <ClInclude Include="MarketEntryCalculator.h" />
+    <ClInclude Include="McpSocketServer.h" />
     <ClInclude Include="MultiHorizonEngine.h" />
     <ClInclude Include="PriceSeries.h" />
     <ClInclude Include="ProfitCalculator.h" />
@@ -150,6 +154,8 @@
     <ClInclude Include="AdminConfig.h" />
     <ClInclude Include="Routes_Admin.h" />
     <ClInclude Include="Routes_Auth.h" />
+    <ClInclude Include="Routes_ChainManager.h" />
+    <ClInclude Include="Routes_Mcp.h" />
     <ClInclude Include="Routes_Premium.h" />
     <ClInclude Include="Routes_Chart.h" />
     <ClInclude Include="Routes_Core.h" />
@@ -173,9 +179,16 @@
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">--allow-unsupported-compiler %(AdditionalOptions)</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">--allow-unsupported-compiler %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
+    <CudaCompile Include="GpuLLM.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="LLM_ROADMAP.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.1.targets" />
+    <!-- <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.1.targets" /> -->
   </ImportGroup>
 </Project>

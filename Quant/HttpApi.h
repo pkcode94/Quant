@@ -22,6 +22,8 @@
 #include "Routes_Simulator.h"
 #include "Routes_Optimizer.h"
 #include "Routes_Symbols.h"
+#include "Routes_ChainManager.h"
+#include "Routes_Mcp.h"
 #include "CudaAccelerator.h"
 
 #include <mutex>
@@ -52,7 +54,7 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     if (CudaAccelerator::init())
         std::cout << "  [CUDA] GPU detected: " << CudaAccelerator::deviceName() << "\n";
     else
-        std::cout << "  [CUDA] No GPU detected — optimizer will use CPU\n";
+        std::cout << "  [CUDA] No GPU detected ï¿½ optimizer will use CPU\n";
 
     httplib::Server svr;
 
@@ -66,9 +68,9 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
         }
     });
 
-    // Auth middleware — allow login/register/logout without session
+    // Auth middleware ï¿½ allow login/register/logout/mcp without session
     svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
-        if (req.path == "/login" || req.path == "/register" || req.path == "/logout")
+        if (req.path == "/login" || req.path == "/register" || req.path == "/logout" || req.path == "/mcp")
             return httplib::Server::HandlerResponse::Unhandled;
         auto user = ctx.currentUser(req);
         if (user.empty())
@@ -95,7 +97,10 @@ inline void startHttpApi(TradeDatabase& db, int port, std::mutex& dbMutex)
     registerSimulatorRoutes(svr, ctx);
     registerOptimizerRoutes(svr, ctx);
     registerSymbolRoutes(svr, ctx);
+    registerChainManagerRoutes(svr, ctx);
+    registerMcpRoutes(svr, ctx);
 
+    std::cout << "  [MCP]  endpoint: POST /mcp (JSON-RPC 2.0)\n";
     std::cout << "  [HTTP] listening on http://localhost:" << port << "\n";
     if (!svr.listen("0.0.0.0", port))
     {

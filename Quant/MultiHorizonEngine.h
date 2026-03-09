@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Trade.h"
 #include "QuantMath.h"
@@ -37,7 +37,7 @@
 // horizonCount controls how many levels are generated.
 //
 // Absolute fees (buyFee / sellFee) are tracked per-trade on Trade
-// and per-level on ExitLevel � not in HorizonParams.
+// and per-level on ExitLevel — not in HorizonParams.
 
 struct HorizonParams
 {
@@ -157,7 +157,7 @@ public:
     }
 
     // Stop-loss hedging buffer: TP multiplier that pre-funds potential
-    // future SL hits, mirroring the downtrend buffer (�5.5) structure.
+    // future SL hits, mirroring the downtrend buffer (§5.5) structure.
     //
     // Each pre-funded SL hit costs approximately EO of the position.
     // The buffer scales TP upward so that the extra profit covers
@@ -195,7 +195,7 @@ public:
     // Capital-loss cap: clamp ?_sl so that the summed worst-case SL
     // losses across all N levels never exceed the available capital.
     //
-    // Total worst-case loss = ? EO � P_e(i) � q_i � ?_sl  =  ?_sl � ? EO � funding_i
+    // Total worst-case loss = ? EO · P_e(i) · q_i · ?_sl  =  ?_sl · ? EO · funding_i
     //
     // If that sum exceeds availableCapital, scale ?_sl down:
     //   ?_sl_clamped = availableCapital / totalExposure
@@ -211,22 +211,24 @@ public:
     }
 
     // Downtrend buffer: position-derived TP multiplier with
-    // axis-dependent sigmoid curvature (�7.2).
+    // axis-dependent sigmoid curvature (§7.4).
     //
-    // Position delta ? mapped through the normalised sigmoid (�2.1)
-    // with ? itself as steepness � curvature depends on P � q space.
+    // Position delta δ mapped through the normalised sigmoid (§2.1)
+    // with δ itself as steepness — curvature depends on P × q space.
     //
     // The sigmoid interpolates between R_min (lower asymptote) and
     // max(R_max, EO) (upper asymptote).  R_min guarantees a minimum
     // buffer even for tiny positions; R_max caps per-cycle cost.
     // When R_max = 0 the upper bound falls back to EO (time-sensitive
-    // via ?t baked into the fee component).
+    // via Δt baked into the fee component).
     //
-    //   buffer = 1 + n_d * (R_min + sig_norm(t) * (upper - R_min))
+    // The resulting buffer implies a concrete price level P_buffer
+    // at which the extra TP profit can fund fee-neutral re-entry (§7.3):
+    //   P_buffer = (buffer - 1) * TP_base * q / (n_d * q_next * (1 + F))
     //
     //   n_d = 0   -> 1 (disabled)
-    //   ? = 0     -> 1 (nothing deployed)
-    //   ? -> inf  -> 1 + n_d * upper  (saturated)
+    //   δ = 0     -> 1 (nothing deployed)
+    //   δ -> inf  -> 1 + n_d * upper  (saturated)
     static double calculateDowntrendBuffer(double price, double quantity,
                                             double portfolioPump,
                                             double effectiveOverhead,
@@ -238,6 +240,42 @@ public:
         if (upper < lower) upper = lower;
         double delta = positionDelta(price, quantity, portfolioPump);
         return QuantMath::sigmoidBuffer(delta, lower, upper, downtrendCount);
+    }
+
+    // Price-level downtrend buffer (§7.2): explicit mode.
+    // Computes the TP multiplier that guarantees fee-neutral re-entry
+    // at pBuffer with quantity qNext for nDowntrend re-entries.
+    //
+    // The buffer can only ever fund a FRACTION of the next trade
+    // at realistic prices (§7.2.1).  q_next_max / q ≈ buffer - 1.
+    static double calculatePriceLevelBuffer(double pBuffer, double qNext,
+                                             double entryPrice,
+                                             double effectiveOverhead,
+                                             double feeSpread,
+                                             double feeHedging,
+                                             double deltaTime,
+                                             double quantity,
+                                             int downtrendCount = 1)
+    {
+        double tpBase = entryPrice * (1.0 + effectiveOverhead);
+        double feeComp = feeSpread * feeHedging * deltaTime;
+        return QuantMath::bufferFromPriceLevel(pBuffer, qNext, tpBase,
+                                               quantity, feeComp, downtrendCount);
+    }
+
+    // Implied price level from any buffer multiplier (§7.3).
+    // Reports the concrete price at which re-entry is guaranteed.
+    static double impliedBufferPrice(double buffer, double entryPrice,
+                                      double effectiveOverhead,
+                                      double feeSpread, double feeHedging,
+                                      double deltaTime,
+                                      double quantity, double qNext,
+                                      int downtrendCount)
+    {
+        double tpBase = entryPrice * (1.0 + effectiveOverhead);
+        double feeComp = feeSpread * feeHedging * deltaTime;
+        return QuantMath::impliedBufferPrice(buffer, tpBase, quantity,
+                                             qNext, feeComp, downtrendCount);
     }
 
 

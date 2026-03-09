@@ -8,8 +8,9 @@
 // Sigmoid-distributed entry price levels.
 //
 // When rangeAbove / rangeBelow are both 0 (default):
-//   Level 0       = near 0  (deepest discount)
-//   Level N-1     = currentPrice (shallowest, at market)
+//   autoRange=false: Level 0 = near 0, Level N-1 = currentPrice
+//   autoRange=true:  [price × (1 - 3×EO), price]  (heuristic)
+//   adaptiveRange=true: [currentPrice, maxHistoricalPrice] (default, enabled)
 //
 // When rangeAbove or rangeBelow > 0:
 //   Level 0       = currentPrice - rangeBelow
@@ -17,6 +18,14 @@
 //   Levels are sigmoid-interpolated between these bounds.
 //   Higher price levels receive less funding (controlled by risk).
 //
+// ADAPTIVE RANGE (default):
+//   When adaptiveRange=true:
+//   - rangeBelow is set to 0 (entries start at current price)
+//   - rangeAbove is set to max(historicalEntryPrice - currentPrice)
+//   - This creates entries from current up to historical highs
+//   - Ignores manually specified rangeAbove/rangeBelow values
+//
+// LONG positions:
 //   overhead  = computeOverhead(price, qty, params)
 //   BreakEven = entryPrice * (1 + overhead)
 //
@@ -49,7 +58,8 @@ public:
                                             double riskCoefficient = 0.0,
                                             double steepness = 6.0,
                                             double rangeAbove = 0.0,
-                                            double rangeBelow = 0.0)
+                                            double rangeBelow = 0.0,
+                                            bool   autoRange = false)
     {
         double oh = MultiHorizonEngine::computeOverhead(currentPrice, quantity, p);
 
@@ -69,6 +79,17 @@ public:
             priceLow  = currentPrice - rangeBelow;
             priceLow  = QuantMath::floorEps(priceLow);
             priceHigh = currentPrice + rangeAbove;
+        }
+        else if (autoRange)
+        {
+            double eo = QuantMath::effectiveOverhead(oh,
+                p.surplusRate, p.feeSpread,
+                p.feeHedgingCoefficient, p.deltaTime);
+            double band = eo * 3.0;
+            if (band < 0.01) band = 0.01;
+            if (band > 0.99) band = 0.99;
+            priceLow  = QuantMath::floorEps(currentPrice * (1.0 - band));
+            priceHigh = currentPrice;
         }
         else
         {

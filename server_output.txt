@@ -1,0 +1,45 @@
+
+----------------------------------------
+  QUANT TRADE MANAGER
+----------------------------------------
+   1) List trades
+   2) Add trade
+   3) Edit trade
+   4) Delete trade
+   5) Duplicate trade
+   6) Calculate profit
+   7) Generate TP/SL horizons
+   8) View horizons
+   9) Toggle stop-loss on/off
+  10) DCA tracker
+  11) Portfolio summary
+  12) Unrealized P&L
+  13) Profit history
+  14) Price check (TP/SL vs market)
+  15) Market entry calculator
+  16) Exit strategy
+  17) Parameter history
+  18) Replay params
+  19) Export report
+  20) Wallet
+  21) Pending exit orders
+  22) Wipe database
+  23) View entry points
+  24) Mark entry as traded
+  25) Serial generator
+  26) Chain operations
+  27) Simulator
+  28) P&L ledger
+  29) Parameter models
+  30) Execute buy/sell
+  31) Add exit strategy
+  32) Deallocate holdings
+  33) Chain advance
+  34) Chain reset
+  35) P&L backfill
+  36) Execute triggered entries
+  37) Export hledger
+  38) Price series
+   0) Exit
+----------------------------------------
+  > 

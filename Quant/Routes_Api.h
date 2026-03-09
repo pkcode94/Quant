@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <chrono>
+#include <iostream>
 
 // Build SerialParams from parsed form data + wallet balance.
 inline QuantMath::SerialParams buildSerialParams(
@@ -63,8 +64,10 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
     auto& dbMutex = ctx.dbMutex;
 
     // ========== JSON API: GET /api/trades ==========
-    svr.Get("/api/trades", [&](const httplib::Request&, httplib::Response& res) {
+    svr.Get("/api/trades", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
+        std::cerr << "[DB] /api/trades using " << db.tradesFilePath() << "\n";
         auto trades = db.loadTrades();
         std::ostringstream j;
         j << std::fixed << std::setprecision(17) << "[";
@@ -90,6 +93,8 @@ inline void registerApiRoutes(httplib::Server& svr, AppContext& ctx)
         }
         j << "]";
         res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_header("X-Quant-Db-Dir", db.baseDir());
+        res.set_header("X-Quant-Trades-Path", db.tradesFilePath());
         res.set_content(j.str(), "application/json");
     });
 

@@ -4,20 +4,57 @@
 #include "HtmlHelpers.h"
 #include "ProfitCalculator.h"
 #include <mutex>
+#include <fstream>
+#include <iostream>
 
 inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
 {
-    auto& db = ctx.defaultDb;
     auto& dbMutex = ctx.dbMutex;
 
-    // ========== GET /trades � Trades list + forms ==========
+    // ========== GET /trades – Trades list + forms ==========
     svr.Get("/trades", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
+        
+        // ========== VERBOSE LOGGING ==========
+        std::string currentUser = ctx.currentUser(req);
+        std::string dbPath = db.tradesFilePath();
+        std::cerr << "[TRADES] User: " << (currentUser.empty() ? "NOT_LOGGED_IN" : currentUser) << "\n";
+        std::cerr << "[TRADES] DB Path: " << dbPath << "\n";
+        
+        // Get file size
+        std::ifstream tradeFile(dbPath, std::ios::binary | std::ios::ate);
+        long long fileSize = 0;
+        if (tradeFile.is_open()) {
+            fileSize = tradeFile.tellg();
+            tradeFile.close();
+            std::cerr << "[TRADES] File Size: " << fileSize << " bytes\n";
+        } else {
+            std::cerr << "[TRADES] File Size: 0 bytes (file does not exist or cannot be opened)\n";
+        }
+        
+        // Load and count trades
+        auto trades = db.loadTrades();
+        int buyCount = 0, sellCount = 0;
+        for (const auto& t : trades) {
+            if (t.type == TradeType::Buy) ++buyCount;
+            else ++sellCount;
+        }
+        std::cerr << "[TRADES] Total Trades: " << trades.size() << " (Buys: " << buyCount << ", Sells: " << sellCount << ")\n";
+        // ========== END VERBOSE LOGGING ==========
+        
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
         h << "<h1>Trades</h1>";
-        auto trades = db.loadTrades();
+        h << "<div class='muted' style='margin-bottom:16px; padding:8px; background:#f5f5f5; border-left:3px solid #64748b;'>"
+          << "<small><strong>[DEBUG]</strong> "
+          << "User: <code>" << html::esc(currentUser.empty() ? "NOT_LOGGED_IN" : currentUser) << "</code> | "
+          << "Path: <code>" << html::esc(dbPath) << "</code> | "
+          << "Size: <code>" << fileSize << " bytes</code> | "
+          << "Trades: <code>" << trades.size() << "</code>"
+          << "</small></div>";
+        
         if (trades.empty()) { h << "<p class='empty'>(no trades)</p>"; }
         else
         {
@@ -239,6 +276,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /add-trade ==========
     svr.Post("/add-trade", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         if (!ctx.canAddTrade(req))
         {
             res.set_redirect("/trades?err=Trade+limit+reached.+Upgrade+to+Premium+for+unlimited+trades.", 303);
@@ -282,6 +320,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /delete-trade ==========
     svr.Post("/delete-trade", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int id = fi(f, "id");
         auto trades = db.loadTrades();
@@ -293,6 +332,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-horizon-tp ==========
     svr.Post("/set-horizon-tp", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int tradeId = fi(f, "tradeId");
         std::string sym = fv(f, "symbol");
@@ -308,6 +348,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-horizon-sl ==========
     svr.Post("/set-horizon-sl", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int tradeId = fi(f, "tradeId");
         std::string sym = fv(f, "symbol");
@@ -323,6 +364,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-horizon-sl-active ==========
     svr.Post("/set-horizon-sl-active", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int tradeId = fi(f, "tradeId");
         std::string sym = fv(f, "symbol");
@@ -339,6 +381,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-exit-tp ==========
     svr.Post("/set-exit-tp", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int exitId = fi(f, "exitId");
         double tp = fd(f, "tp");
@@ -352,6 +395,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-exit-sl ==========
     svr.Post("/set-exit-sl", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int exitId = fi(f, "exitId");
         double sl = fd(f, "sl");
@@ -365,6 +409,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-exit-qty ==========
     svr.Post("/set-exit-qty", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int exitId = fi(f, "exitId");
         double qty = fd(f, "qty");
@@ -378,6 +423,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /set-exit-sl-active ==========
     svr.Post("/set-exit-sl-active", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int exitId = fi(f, "exitId");
         bool active = (fv(f, "active") == "1");
@@ -392,6 +438,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /delete-exit ==========
     svr.Post("/delete-exit", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int exitId = fi(f, "exitId");
         auto exits = db.loadExitPoints();
@@ -404,6 +451,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /add-exit ==========
     svr.Post("/add-exit", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int tradeId = fi(f, "tradeId");
         std::string sym = fv(f, "symbol");
@@ -436,6 +484,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /execute-buy ==========
     svr.Post("/execute-buy", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         if (!ctx.canAddTrade(req))
         {
             res.set_redirect("/trades?err=Trade+limit+reached.+Upgrade+to+Premium+for+unlimited+trades.", 303);
@@ -464,6 +513,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /execute-sell ==========
     svr.Post("/execute-sell", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         if (!ctx.canAddTrade(req))
         {
             res.set_redirect("/trades?err=Trade+limit+reached.+Upgrade+to+Premium+for+unlimited+trades.", 303);
@@ -490,6 +540,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== GET /edit-trade ==========
     svr.Get("/edit-trade", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         std::ostringstream h;
         h << std::fixed << std::setprecision(17);
         h << html::msgBanner(req) << html::errBanner(req);
@@ -526,6 +577,7 @@ inline void registerTradeRoutes(httplib::Server& svr, AppContext& ctx)
     // ========== POST /edit-trade ==========
     svr.Post("/edit-trade", [&](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lk(dbMutex);
+        auto& db = ctx.userDb(req);
         auto f = parseForm(req.body);
         int id = fi(f, "id");
         auto trades = db.loadTrades();

@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Quant (server-only)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "D:\\q\\x64\\Debug\\Quant.exe",
+            "args": [
+                "--server-only"
+            ],
+            "stopAtEntry": false,
+            "cwd": "D:\\q",
+            "environment": [],
+            "console": "externalTerminal",
+            "preLaunchTask": "Build Quant (Debug, x64)"
+        },
+        {
+            "name": "Quant (interactive)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "D:\\q\\x64\\Debug\\Quant.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "D:\\q",
+            "environment": [],
+            "console": "externalTerminal",
+            "preLaunchTask": "Build Quant (Debug, x64)"
+        }
+    ]
+}

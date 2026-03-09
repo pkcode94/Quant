@@ -38,6 +38,8 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='number' name='cycles' value='5'><br>"
              "<label>Entry Levels</label>"
              "<input type='number' name='levels' value='4'><br>"
+             "<label>Exit TP Levels per Trade (0 = same as entry levels)</label>"
+             "<input type='number' name='exitLevels' value='0'><br>"
              "<h3>Price Series (optional &mdash; enables simulator mode)</h3>"
              "<p style='color:#64748b;font-size:0.78em;margin-bottom:6px;'>"
              "One per line: <code>timestamp,price</code>. "
@@ -63,7 +65,7 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "<tr><td>Surplus Rate (s)</td>"
              "<td><input type='number' name='surplus' step='any' value='0.02' style='width:100%;'></td>"
              "<td><input type='number' name='surplus_min' step='any' value='0' style='width:100%;'></td>"
-             "<td><input type='number' name='surplus_max' step='any' value='1' style='width:100%;'></td>"
+             "<td><input type='number' name='surplus_max' step='any' value='0.10' style='width:100%;'></td>"
              "<td style='text-align:center;'><input type='checkbox' name='surplus_frozen' value='1'></td></tr>"
              "<tr><td>Risk Coefficient (r)</td>"
              "<td><input type='number' name='risk' step='any' value='0.5' style='width:100%;'></td>"
@@ -77,8 +79,8 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "<td style='text-align:center;'><input type='checkbox' name='steepness_frozen' value='1'></td></tr>"
              "<tr><td>Fee Hedging (f<sub>h</sub>)</td>"
              "<td><input type='number' name='feeHedging' step='any' value='1' style='width:100%;'></td>"
-             "<td><input type='number' name='feeHedging_min' step='any' value='0.1' style='width:100%;'></td>"
-             "<td><input type='number' name='feeHedging_max' step='any' value='10' style='width:100%;'></td>"
+             "<td><input type='number' name='feeHedging_min' step='any' value='0.5' style='width:100%;'></td>"
+             "<td><input type='number' name='feeHedging_max' step='any' value='3' style='width:100%;'></td>"
              "<td style='text-align:center;'><input type='checkbox' name='feeHedging_frozen' value='1'></td></tr>"
              "<tr><td>Max Risk (R<sub>max</sub>)</td>"
              "<td><input type='number' name='maxRisk' step='any' value='0' style='width:100%;'></td>"
@@ -110,6 +112,11 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='number' name='rangeAbove' step='any' value='0'><br>"
              "<label>Range Below</label>"
              "<input type='number' name='rangeBelow' step='any' value='0'><br>"
+             "<label>Auto Range (EO-adaptive entry band)</label>"
+             "<select name='autoRange'>"
+             "<option value='0' selected>Off &mdash; [0, price]</option>"
+             "<option value='1'>On &mdash; [price&times;(1-3&times;EO), price]</option>"
+             "</select><br>"
              "<label>Future Trade Count</label>"
              "<input type='number' name='futureTradeCount' value='0'><br>"
              "<label>SL Fraction</label>"
@@ -125,6 +132,11 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
              "<input type='number' name='exitSteepness' step='any' value='4'><br>"
              "<label>DT Count</label>"
              "<input type='number' name='downtrendCount' value='1'><br>"
+             "<h3>Trade Frequency &amp; Capital Pump</h3>"
+             "<label>Max Trades per Month (0 = unlimited)</label>"
+             "<input type='number' name='maxTradesPerMonth' value='0'><br>"
+             "<label>Capital Pump per Month</label>"
+             "<input type='number' name='capitalPumpPerMonth' step='any' value='0'><br>"
              "<h3>Optimisation</h3>"
              "<label>Objective</label><select name='objective'>"
              "<option value='1'>J1: MaxProfit</option>"
@@ -188,6 +200,7 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
         cp.capital         = fd(f, "capital", 1000);
         cp.cycles          = fi(f, "cycles", 5);
         cp.levels          = fi(f, "levels", 4);
+        cp.exitLevels      = fi(f, "exitLevels", 0);
         cp.surplus         = fd(f, "surplus", 0.02);
         cp.risk            = fd(f, "risk", 0.5);
         cp.steepness       = fd(f, "steepness", 6.0);
@@ -211,6 +224,7 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
         cp.sellFeeRate     = fd(f, "sellFeeRate", 0.001);
         cp.rangeAbove      = fd(f, "rangeAbove");
         cp.rangeBelow      = fd(f, "rangeBelow");
+        cp.autoRange       = (fv(f, "autoRange") == "1");
         cp.futureTradeCount   = fi(f, "futureTradeCount");
         cp.stopLossFraction   = fd(f, "stopLossFraction", 1.0);
         cp.stopLossHedgeCount = fi(f, "stopLossHedgeCount");
@@ -218,6 +232,8 @@ inline void registerOptimizerRoutes(httplib::Server& svr, AppContext& ctx)
         cp.exitFraction       = fd(f, "exitFraction", 1.0);
         cp.exitSteepness      = fd(f, "exitSteepness", 4.0);
         cp.downtrendCount     = fi(f, "downtrendCount", 1);
+        cp.maxTradesPerMonth  = fi(f, "maxTradesPerMonth", 0);
+        cp.capitalPumpPerMonth = fd(f, "capitalPumpPerMonth", 0.0);
 
         // Parse symbol and price series
         cp.symbol = normalizeSymbol(fv(f, "symbol"));

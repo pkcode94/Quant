@@ -17,8 +17,10 @@
 #include "HttpApi.h"
 #include "QuantMath.h"
 #include "Simulator.h"
+#include "McpSocketServer.h"
 
 #include <thread>
+#include <chrono>
 #include <mutex>
 
 static void printSep() { std::cout << "----------------------------------------\n"; }
@@ -2612,10 +2614,19 @@ static void priceSeriesMenu(TradeDatabase& db)
 
 // ---- Main ----
 
-int main()
+int main(int argc, char* argv[])
 {
     TradeDatabase db("db");
     std::mutex dbMutex;
+
+    // Check for --server-only flag to skip interactive CLI
+    bool serverOnly = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--server-only") {
+            serverOnly = true;
+            break;
+        }
+    }
 
     // Start HTTP API on a background thread
     int httpPort = 8080;
@@ -2628,15 +2639,34 @@ int main()
             std::cerr << "  [HTTP] FATAL: unknown exception" << std::endl;
         }
         });
-    httpThread.detach();
+    if (serverOnly) {
+        httpThread.detach();  // Still detach for server-only mode
+    } else {
+        httpThread.detach();  // Detach for CLI mode too
+    }
 
-    bool running = true;
-    while (running)
-    {
-        std::cout << "\n";
-        printSep();
-        std::cout << "  QUANT TRADE MANAGER\n";
-        printSep();
+    // Start MCP TCP socket server on a background thread
+    static McpSocketServer mcpServer(9100, "db");
+    std::thread mcpThread([]() {
+        try {
+            mcpServer.run();
+        } catch (const std::exception& e) {
+            std::cerr << "  [MCP-TCP] FATAL: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "  [MCP-TCP] FATAL: unknown exception" << std::endl;
+        }
+        });
+    mcpThread.detach();
+
+    if (!serverOnly) {
+        // Interactive CLI mode
+        bool running = true;
+        while (running)
+        {
+            std::cout << "\n";
+            printSep();
+            std::cout << "  QUANT TRADE MANAGER\n";
+            printSep();
         std::cout << "   1) List trades\n";
         std::cout << "   2) Add trade\n";
         std::cout << "   3) Edit trade\n";
@@ -2723,6 +2753,16 @@ int main()
         case 38: priceSeriesMenu(db);      break;
         case 0:  running = false;        break;
         default: std::cout << "  Invalid choice.\n"; break;
+        }
+    }
+    } else {
+        // Server-only mode - keep process alive for HTTP/MCP servers
+        std::cout << "  [SERVER] Running in server-only mode (--server-only)\n";
+        std::cout << "  [SERVER] HTTP API: http://localhost:8080\n";
+        std::cout << "  [SERVER] MCP socket: localhost:9100\n";
+        std::cout << "  [SERVER] Press Ctrl+C to exit\n";
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 

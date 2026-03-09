@@ -1,0 +1,77 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Quant (Debug, x64)",
+            "type": "shell",
+            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "Quant/Quant.vcxproj",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/t:Build"
+            ],
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Build Quant (Release, x64)",
+            "type": "shell",
+            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "Quant/Quant.vcxproj",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/t:Build"
+            ],
+            "problemMatcher": [
+                "$msCompile"
+            ]
+        },
+        {
+            "label": "Clean Quant",
+            "type": "shell",
+            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "Quant/Quant.vcxproj",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/t:Clean"
+            ]
+        },
+        {
+            "label": "Rebuild Quant (Debug, x64)",
+            "type": "shell",
+            "command": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "Quant/Quant.vcxproj",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/t:Rebuild"
+            ],
+            "problemMatcher": [
+                "$msCompile"
+            ]
+        },
+        {
+            "label": "Run Quant (server-only)",
+            "type": "shell",
+            "command": "D:\\q\\x64\\Debug\\Quant.exe",
+            "args": [
+                "--server-only"
+            ],
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            }
+        }
+    ]
+}

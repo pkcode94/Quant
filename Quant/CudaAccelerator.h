@@ -31,6 +31,11 @@ struct GpuSimParams
     double exitRisk, exitFraction, exitSteepness;
     double entryRisk, entrySteepness;
     int    chainCycles;
+    int    exitLevels;
+
+    int    maxTradesPerMonth;
+    double capitalPumpPerMonth;
+    int    autoRange;
 };
 
 // Host API (defined in CudaKernels.cu)

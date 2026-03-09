@@ -1,0 +1,16 @@
+[
+  {
+    "chainId": 1,
+    "name": "lol",
+    "symbol": "TEST",
+    "active": 0,
+    "theoretical": 0,
+    "currentCycle": 0,
+    "capital": 4965.2573119999997,
+    "totalSavings": 0,
+    "savingsRate": 3,
+    "createdAt": "2026-03-07T22:20:32",
+    "notes": "",
+    "cycles": []
+  }
+]

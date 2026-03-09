@@ -67,6 +67,7 @@ struct ChainParams
     double capital       = 0.0;
     int    cycles        = 3;
     int    levels        = 4;
+    int    exitLevels    = 0;     // TP levels per trade (0 = same as entry levels)
 
     // Optimizable parameters ?
     double surplus       = 0.02;
@@ -78,10 +79,10 @@ struct ChainParams
     double savingsRate   = 0.05;
 
     // Per-parameter optimisation bounds (non-negotiable limits + freeze toggle)
-    ParamBound bSurplus     {0.0,  1.0, false};
+    ParamBound bSurplus     {0.0,  0.10, false};
     ParamBound bRisk        {0.0,  1.0, false};
     ParamBound bSteepness   {0.1, 50.0, false};
-    ParamBound bFeeHedging  {0.1, 10.0, false};
+    ParamBound bFeeHedging  {0.5,  3.0, false};
     ParamBound bMaxRisk     {0.0,  1.0, false};
     ParamBound bSavingsRate {0.0,  1.0, false};
 
@@ -103,6 +104,13 @@ struct ChainParams
     double exitFraction     = 1.0;
     double exitSteepness    = 4.0;
     int    downtrendCount   = 1;
+
+    // Trade frequency & capital pump
+    int    maxTradesPerMonth   = 0;     // 0 = unlimited
+    double capitalPumpPerMonth = 0.0;   // 0 = disabled
+
+    // Entry range mode
+    bool   autoRange = false;  // false = [0, price]; true = EO-adaptive
 
     // Price series mode (empty = analytical mode)
     std::string  symbol;
@@ -313,7 +321,7 @@ class ChainOptimizer
         hp.symbolCount           = p.symbolCount;
         hp.deltaTime             = p.deltaTime;
         hp.coefficientK          = p.coefficientK;
-        hp.horizonCount          = p.levels;
+        hp.horizonCount          = (p.exitLevels > 0) ? p.exitLevels : p.levels;
         hp.portfolioPump         = capital;
         hp.maxRisk               = p.maxRisk;
         hp.minRisk               = p.minRisk;
@@ -330,7 +338,7 @@ class ChainOptimizer
         auto entries = MarketEntryCalculator::generate(
             p.price, 1.0, hp,
             p.risk, p.steepness,
-            p.rangeAbove, p.rangeBelow);
+            p.rangeAbove, p.rangeBelow, p.autoRange);
 
         double minEntry = p.price * 0.01;
         std::erase_if(entries, [minEntry](const EntryLevel& el) {
@@ -531,6 +539,9 @@ class ChainOptimizer
         cfg.downtrendCount  = p.downtrendCount;
         cfg.chainCycles     = true;
         cfg.savingsRate     = p.savingsRate;
+        cfg.autoRange       = p.autoRange;
+        cfg.entryLevels     = p.levels;
+        cfg.exitLevels      = p.exitLevels;
 
         cfg.horizonParams.feeSpread             = p.feeSpread;
         cfg.horizonParams.feeHedgingCoefficient = p.feeHedging;
@@ -753,6 +764,10 @@ class ChainOptimizer
             g.exitSteepness = cp.exitSteepness;
             g.entryRisk = cp.risk; g.entrySteepness = cp.steepness;
             g.chainCycles = 1;
+            g.exitLevels = cp.exitLevels;
+            g.maxTradesPerMonth = cp.maxTradesPerMonth;
+            g.capitalPumpPerMonth = cp.capitalPumpPerMonth;
+            g.autoRange = cp.autoRange ? 1 : 0;
             return g;
         };
 
@@ -826,7 +841,7 @@ public:
             auto entries = MarketEntryCalculator::generate(
                 p.price, 1.0, hp,
                 p.risk, p.steepness,
-                p.rangeAbove, p.rangeBelow);
+                p.rangeAbove, p.rangeBelow, p.autoRange);
 
             double minEntry = p.price * 0.01;
             std::erase_if(entries, [minEntry](const EntryLevel& el) {

@@ -1,0 +1,14 @@
+{
+    "servers": {
+        "quant-mcp": {
+            "command": "D:\\q\\quant-mcp\\x64\\Debug\\mcp\\quant-mcp.exe",
+            "args": [
+                "--db",
+                "D:\\q\\users\\admin\\db",
+                "--port",
+                "9100"
+            ],
+            "cwd": "D:\\q"
+        }
+    }
+}

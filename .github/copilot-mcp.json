@@ -1,0 +1,9 @@
+{
+    "servers": {
+        "quant": {
+            "type": "stdio",
+            "command": "D:/q/quant-mcp/x64/Release/mcp/quant-mcp.exe",
+            "args": ["--db", "D:/q/users/admin/db"]
+        }
+    }
+}
